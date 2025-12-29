@@ -36,7 +36,7 @@ We successfully implemented and trained a 3-layer Hierarchical Residual VQ archi
 
 Building a discrete token world model combining TWISTER (ICLR 2025) and DreamerV4 innovations. **ATTEMPTING CONTRIBUTION** : first per-layer expert counts in world modeling, expected 2.8x inference speedup with 40% parameter reduction, temporal hierarchy matching semantic hierarchy, +15% long-horizon accuracy. Target: ~11M parameter model achieving <5ms inference for PPO imagination rollouts, enabling model-based RL with 10x sample efficiency over model-free baselines.
 
-Implemented Hierarchical Causal Mask
+Implemented Hierarchical Causal Mask (adapting Triangular mask to prevent timesteps seeing previous layers)
 
 ## Lessons Learned
 
