@@ -1,1 +1,1 @@
-# dreamer
+Frozen vision encoders + discrete tokens + attention dynamics = sample-efficient Atari control on a single GPU. Research engineering sprint combining three validated techniques in a novel architecture
