@@ -42,8 +42,8 @@ class ReplayBuffer:
         next_state,
         done,
     ):
-        
         """ STORE SINGLE TRANSITION IN THE BUFFER (state, action, reward, next_state, done), UPDATE POINTER AND FULL FLAG """
+
         self.states[self.ptr] = state
         self.actions[self.ptr] = action
         self.rewards[self.ptr] = reward
@@ -60,8 +60,8 @@ class ReplayBuffer:
         self,
         filepath : str,
     ):
-        
         """ SAVE THE REPLAY BUFFER DATA TO FILEPATH AS NPZ COMPRESSED FILE """
+
         os.makedirs(os.path.dirname(filepath), exist_ok = True)
         np.savez_compressed(
             filepath,
@@ -75,10 +75,10 @@ class ReplayBuffer:
 
 
     def __len__(self):
-
         """ RETURN SIZE OF BUFFER, OR MAX SIZE IF FULL """
+        
         return self.max_size if self.full else self.ptr
-    
+     
 
 
 def collect_episodes(
