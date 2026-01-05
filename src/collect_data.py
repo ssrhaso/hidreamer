@@ -1,3 +1,4 @@
+""" DATA COLLECTION FOR ATARI GAME ENVIRONMENT (EFFICIENT STORAGE IN REPLAY BUFFER) """
 import ale_py
 import gymnasium as gym
 import numpy as np
