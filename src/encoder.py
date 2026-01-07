@@ -85,7 +85,7 @@ class FrozenDinoV2Encoder(nn.Module):
             outputs = self.model(**inputs)
 
             # EXTRACT CLS TOKEN EMBEDDINGS
-            embeddings = outputs.last_hidden_state[:, 0, :] # CLS TOKEN AT INDEX 0
+            embeddings = outputs.last_hidden_state[:, 0, :] # CLS TOKEN AT INDEX 0    
 
         return embeddings
 
@@ -102,4 +102,21 @@ def extract_batch(
     OUTPUT : BATCH OF EMBEDDINGS SHAPE (B, 384)
     """
 
-         
+    # PREPROCESS FRAMES
+
+    if frames.ndim == 3: # (B, 84, 84)
+        processed = np.array([
+            self.preprocess_frame(frames[i]) for i in range(len(frames))
+        ])
+        
+    
+    elif frames.ndim == 4:# (B, 4, 84, 84)
+        processed = np.array([
+            self.preprocess_frame(frames[i]) for i in range(len(frames))
+        ])
+    
+    else:
+        raise ValueError(f"EXPECTED FRAMES DIMENSIONS (B, 84, 84) OR (B, 4, 84, 84), GOT {frames.shape}")
+    
+    
+        
