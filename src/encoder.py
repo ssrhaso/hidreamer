@@ -131,10 +131,42 @@ def test_encoder():
     
     """ TESTS """
     # TEST 1 : SINGLE FRAME
-    print ("TEST 1 : SINGLE FRAME")
+    print("TEST 1 : SINGLE FRAME")
     dummy_frame = np.random.randint(0, 256, size = (84, 84), dtype = np.uint8)
     processed = encoder.preprocess_frame(dummy_frame)
     print(f"PROCESSED FRAME SHAPE: {processed.shape})")
-    
+
     # ASSERT TO CHECK AGAINST EXPECTED SHAPE (84, 84, 3)
     assert processed.shape == (84, 84, 3), f"EXPECTED PROCESSED FRAME SHAPE (84,84,3), GOT {processed.shape}"
+
+    embedding =  encoder.forward(processed[np.newaxis, ...]) # ADD BATCH DIMENSION
+    # ASSERT TO CHECK AGAINST EXPECTED SHAPE (1, 384)
+    print(f"EMBEDDING SHAPE: {embedding.shape})")
+    assert embedding.shape == (1, 384), f"EXPECTED EMBEDDING SHAPE (1,384), GOT {embedding.shape}"  
+    
+
+    # TEST 2 : 4 STACKED FRAMES
+    print("TEST 2 : 4 STACKED FRAMES")
+    stacked_frame = np.random.randint(0, 256, size = (4, 84, 84), dtype = np.uint8)
+    processed = encoder.preprocess_frame(stacked_frame)
+    print(f"PROCESSED STACKED FRAME SHAPE: {processed.shape})")
+    # ASSERT TO CHECK AGAINST EXPECTED SHAPE (84, 84, 3)
+    assert processed.shape == (84, 84, 3), f"EXPECTED PROCESSED FRAME SHAPE (84,84,3), GOT {processed.shape}"
+    
+    # TEST 3 : BATCH OF FRAMES
+    print("TEST 3 : BATCH OF FRAMES")
+    batch_frames = np.random.randint(0, 256, size = (4, 84, 84), dtype = np.uint8)
+    embeddings = encoder.extract_batch(batch_frames)
+    print(f"BATCH EMBEDDINGS SHAPE: {embeddings.shape})")
+    # ASSERT TO CHECK AGAINST EXPECTED SHAPE (B, 384)
+    assert embeddings.shape == (4, 384), f"EXPECTED BATCH EMBEDDINGS SHAPE (4,384), GOT {embeddings.shape}"
+
+    # TEST 4 : FROZEN CHECK
+    print("TEST 4 : FROZEN CHECK")
+    frozen = not any (p.requires_grad for p in encoder.model.parameters())
+    print(f"MODEL FROZEN: {frozen}")
+    assert frozen, "MODEL PARAMETERS ARE NOT FROZEN"
+
+    print("ALL TESTS PASSED!")
+    return True
+    
