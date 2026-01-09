@@ -79,6 +79,39 @@ def extract_embeddings(
     
     return embeddings
             
+def validate_embeddings(
+    embeddings : np.ndarray,
+    save_path : str
+): 
+    """ VALIDATE AND PREPARE SAVING EMBEDDINGS TO DISK """
+    
+    print(f"VALIDATING EMBEDDINGS...")
+    print(f"SHAPE: {embeddings.shape}")
+    print(f"DATA TYPE: {embeddings.dtype}")
+    print(f"MIN VALUE: {embeddings.min()}")
+    print(f"MAX VALUE: {embeddings.max()}")
+    print(f"MEAN VALUE: {embeddings.mean()}")
+    
+    # ZERO VECTORS
+    num_zero_rows = np.sum(np.all(embeddings == 0, axis = 1))
+    print(f"NUMBER OF ZERO VECTORS: {num_zero_rows}")
+    if num_zero_rows > 0:
+        print(f"WARNING: {num_zero_rows} ZERO VECTORS DETECTED")
+    
+    # VARIANCE
+    row_variance = np.var(embeddings, axis = 1).mean()
+    print(f"AVERAGE ROW VARIANCE: {row_variance}")
+    if row_variance < 1e-6:
+        print(f"WARNING: LOW VARIANCE DETECTED")
+    
+    # FILE SIZE
+    file_size_mb = ((embeddings.nbytes) / (1024 * 1024))
+    print(f"FILE SIZE: {file_size_mb:.2f} MB")  
+    print(f"VALIDATIONS COMPLETE. READY FOR SAVING EMBEDDINGS TO {save_path}...")
+    
+
+    
+        
     
     
     
