@@ -110,7 +110,44 @@ def validate_embeddings(
     print(f"VALIDATIONS COMPLETE. READY FOR SAVING EMBEDDINGS TO {save_path}...")
     
 
+def main():
+    """ MAIN EXECUTION """
+    print("EMBEDDING EXTRACTION PROCESS STARTED...")
     
+    # PATHS
+    replay_buffer_path = "data/replay_buffer_ALE_Pong-v5.npz"
+    output_path = "data/embeddings_ALE_Pong-v5_dinov2_base.npy"
+    
+    # VALIDATION
+    if not os.path.exists(replay_buffer_path):
+        raise FileNotFoundError(f"REPLAY BUFFER FILE NOT FOUND AT {replay_buffer_path}")
+    
+    # LOAD REPLAY BUFFER
+    frames = load_replay_buffer(replay_buffer_path)
+    
+    # ENCODER INITIALIZATION
+    encoder = FrozenDinoV2Encoder()
+    # EMBEDDINGS
+    embeddings = extract_embeddings(
+        frames = frames,
+        encoder = encoder,
+        batch_size = 64,
+        max_frames = 100_000
+    )
+    
+    # VALIDATE EMBEDDINGS
+    validate_embeddings(
+        embeddings = embeddings,
+        save_path = output_path
+    )
+    
+    # SAVE EMBEDDINGS TO DISK
+    print(f"SAVING EMBEDDINGS TO {output_path}...")
+    np.save(output_path, embeddings)
+    print("EMBEDDINGS SAVED SUCCESSFULLY.")
+
+if __name__ == "__main__":
+    main()
         
     
     
