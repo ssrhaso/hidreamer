@@ -18,10 +18,10 @@ def load_replay_buffer(
     INPUT : PATH TO REPLAY BUFFER
     OUTPUT : DICTIONARY CONTAINING REPLAY BUFFER ARRAYS
     """
-    
+
     print(f"LOADING REPLAY BUFFER FROM {path}...")
     with np.load(path, allow_pickle = True) as data:
-        frames = data["frames"] # SHAPE (N, 84, 84) OR (N, 4, 84, 84)
+        frames = data["states"] # SHAPE (N, 84, 84) OR (N, 4, 84, 84)
         print(f"SHAPE: {frames.shape}")
         print(f"DATA TYPE: {frames.dtype}")
         print(f"MIN VALUE: {frames.min()}")
