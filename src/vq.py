@@ -28,6 +28,6 @@ class ProjectionMLP(nn.Module):
         self,
         x : torch.Tensor,
     ):
-        """ FORWARD PASS THROUGH PROJECTION MLP """
+        """ FORWARD PASS THROUGH PROJECTION MLP (384->128) """
         return self.net(x)
 
