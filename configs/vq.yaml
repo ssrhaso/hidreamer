@@ -1,1 +1,26 @@
 # CONFIG FOR VQ-VAE MODEL
+
+# PATHS
+data:
+  embeddings_path: 'data/embeddings_ALE_Pong-v5_dinov2_base.npy'
+  output_dir: 'data'
+
+# MODEL
+model:
+  input_dim: 384              # DINOv2 (frozen, don't change)
+  latent_dim: 128             # Projection dimension
+  num_codes: 256              # Codebook size (discrete tokens)
+  commitment_cost: 0.25       # Beta for VQ loss
+
+# TRAINING
+training:
+  batch_size: 256             # T4 GPU: safe max
+  num_epochs: 50              # Usually converges in 20-50
+  learning_rate: 1.0e-3       # Standard starting point
+  weight_decay: 1.0e-4        # L2 regularization
+  val_split: 0.05             # 95/5 train/val split
+
+# OTHER
+seed: 42
+device: 'cuda'
+mixed_precision: true
