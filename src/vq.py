@@ -41,6 +41,12 @@ class ProjectionMLP(nn.Module):
         return self.net(x)
 
 
+
+
+
+
+
+
 class VQVAE(nn.Module):
     """ VQ-VAE MODULE FOR VECTOR QUANTIZATION AND DISCRETE TOKENIZATION OF LATENT EMBEDDINGS """
     def __init__(
