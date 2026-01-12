@@ -12,7 +12,7 @@ class ReplayBuffer:
     def __init__(
         self,
         max_size : int = 100_000, # 100K 
-        state_shape : Tuple = (4, 84, 84, 3), # STACKED RGB FRAMES SHAPE
+        state_shape : Tuple = (4, 84, 84), # STACKED FRAMES SHAPE
 
     ):
         self.max_size = max_size
@@ -76,7 +76,6 @@ class ReplayBuffer:
 
     def __len__(self):
         """ RETURN SIZE OF BUFFER, OR MAX SIZE IF FULL """
-
         return self.max_size if self.full else self.ptr
      
 
@@ -91,7 +90,7 @@ def collect_episodes(
     
     print(f"COLLECTING {num_episodes} EPISODES FROM {env_name}...")
     env = gym.make(env_name)
-    env = gym.wrappers.AtariPreprocessing(env, frame_skip = 1, screen_size = 84, grayscale_obs = False, scale_obs = False)
+    env = gym.wrappers.AtariPreprocessing(env, frame_skip = 1, screen_size = 84, grayscale_obs = True, scale_obs = False)
     env = gym.wrappers.FrameStackObservation(env, stack_size = 4)
 
     obs_shape = env.observation_space.shape
