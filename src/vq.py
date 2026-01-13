@@ -51,16 +51,18 @@ class VQVAE(nn.Module):
     """ VQ-VAE MODULE FOR VECTOR QUANTIZATION AND DISCRETE TOKENIZATION OF LATENT EMBEDDINGS """
     def __init__(
         self,
-        num_embeddings : int = 256,
-        embedding_dim : int = 128,
+        num_codebook_entries : int = 256,
+        codebook_dim : int = 128,
         commitment_cost : float = 0.25,
     ):
         super().__init__()
-        self.num_embeddings = num_embeddings
-        self.embedding_dim = embedding_dim
+        self.num_codebook_entries = num_codebook_entries
+        self.codebook_dim = codebook_dim
         self.commitment_cost = commitment_cost
-        self.embedding = nn.Embedding(num_embeddings, embedding_dim)
-        self.embedding.weight.data.uniform_(-1 / num_embeddings, 1 / num_embeddings)
+        
+        # CREATE CODEBOOK AND INIT WEIGHTS 
+        self.codebook = nn.Embedding(num_codebook_entries, codebook_dim) 
+        self.codebook.weight.data.uniform_(-1 / num_codebook_entries, 1 / num_codebook_entries) 
 
     def forward(
         self,
@@ -69,30 +71,85 @@ class VQVAE(nn.Module):
         """ QUANTIZE CONTINIOUS LATENTS TO NEAREST CODEBOOK ENTRIES (DISCRETE TOKENIZATION) """
 
         # FLATTEN INPUT FOR DISTANCE CALCULATION
-        z_flat = z.reshape(-1, self.embedding_dim)
+        z_flat = z.reshape(-1, self.codebook_dim)
 
         # COMPUTE DISTANCES BETWEEN LATENTS AND CODEBOOK ENTRIES
+        
+        # a^2 + b^2 - 2ab (EXPANDED FORMULA FOR ||a-b||^2)
         distances = (
-            torch.sum(z_flat ** 2, dim=1, keepdim=True)
-            + torch.sum(self.embedding.weight ** 2, dim=1)
-            - 2 * torch.matmul(z_flat, self.embedding.weight.t())
+            torch.sum(z_flat ** 2, dim=1, keepdim=True) # |a|^2 SQUARED NORM OF LATENTS
+            + torch.sum(self.codebook.weight ** 2, dim=1)  # |b|^2 SQUARED NORM OF CODEBOOK ENTRIES
+            - 2 * torch.matmul(z_flat, self.codebook.weight.t()) # -2ab
         )   
 
         # FIND NEAREST CODEBOOK ENTRIES
         indices = torch.argmin(distances, dim=1)
-        z_q = self.embedding(indices)
+        z_quantized = self.codebook(indices)
 
         # COMPUTE LOSSES
         # L1 : CODEBOOK LOSS
-        codebook_loss = F.mse_loss(z_q, z_flat.detach())
+        codebook_loss = F.mse_loss(z_quantized, z_flat.detach())
 
         # L2 : COMMITMENT LOSS
-        commitment_loss = F.mse_loss(z_q.detach(), z_flat)
+        commitment_loss = F.mse_loss(z_quantized.detach(), z_flat)
 
         loss = codebook_loss + self.commitment_cost * commitment_loss
 
         # STRAIGHT-THROUGH ESTIMATOR
-        z_q = z_flat + (z_q - z_flat).detach()
-        z_q = z_q.reshape(z.shape)
+        z_quantized = z_flat + (z_quantized - z_flat).detach()
+        z_quantized = z_quantized.reshape(z.shape)
 
-        return z_q, loss, indices.reshape(z.shape[:-1])  # RETURN QUANTIZED LATENTS, LOSS, AND INDICES
+        return z_quantized, loss, indices.reshape(z.shape[:-1])  # RETURN QUANTIZED LATENTS, LOSS, AND INDICES
+    
+    
+class VQTokenizer(nn.Module):
+    """ COMPLETE VQ TOKENIZER MODULE: PROJECTION MLP + QUANTIZER """
+    
+    def __init__(
+        self,
+        input_dim : int = 384,
+        latent_dim : int = 128,
+        num_codes : int = 256,
+        commitment_cost : float = 0.25,
+    ):
+        super().__init__()
+        self.projection = ProjectionMLP(input_dim=input_dim, output_dim=latent_dim)
+        self.vq = VQVAE(num_codebook_entries=num_codes, codebook_dim=latent_dim, commitment_cost=commitment_cost)
+        self.num_codes = num_codes
+        
+    def forward(
+        self,
+        embeddings : torch.Tensor,
+    ):
+        """ FULL VQ PIPELINE: Project -> Quantize -> Return Tokens """
+        
+        # 1. 384D TO 128D PROJECTION
+        z = self.projection(embeddings) 
+        
+        # 2. VQ-VAE QUANTIZATION
+        z_quantized, vq_loss, indices = self.vq(z) 
+        
+        return z_quantized, vq_loss, indices
+    
+    """ ENCODE // DECODE HELPER FUNCTIONS """
+    def encode(
+        self,
+        embeddings : torch.Tensor,
+    ):
+        """ ENCODE INPUT EMBEDDINGS TO DISCRETE TOKEN INDICES (NO GRADIENTS) """
+        with torch.no_grad():
+            _, _, tokens = self.forward(embeddings)
+            
+        return tokens
+    
+    
+    def decode(
+        self,
+        tokens: torch.Tensor,
+    ):
+        """ DECODE DISCRETE TOKEN INDICES BACK TO CONTINUOUS LATENT EMBEDDINGS (QUANTIZED VECTORS)"""
+        with torch.no_grad():
+            z_quantized = self.vq.codebook(tokens)
+        return z_quantized
+    
+          
