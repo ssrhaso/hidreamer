@@ -21,6 +21,9 @@ class EmbeddingDataset(Dataset):
     # CONSTRUCTOR
     def __init__(self, embeddings_path : str,):
         self.embeddings = np.load(embeddings_path).astype(np.float32)
+        # L2 normalize to unit length
+        norms = np.linalg.norm(self.embeddings, axis=1, keepdims=True) + 1e-8
+        self.embeddings = self.embeddings / norms
         print(f"LOADED EMBEDDINGS FROM {embeddings_path}, LENGTH: {len(self.embeddings)}")
     
     # SAMPLING METHODS
@@ -124,15 +127,24 @@ def train_vq(
         commitment_cost = commitment_cost,
     ).to(device)
     
-    # OPTIMIZER
-    optimizer = torch.optim.Adam(
-        model.parameters(),
-        lr = learning_rate,
-        weight_decay = 1.0e-4,
-    )
+    # INITIALIZE CODEBOOK FROM DATA SAMPLES (no projection)
+    print(f"INITIALIZING CODEBOOK FROM DATA...")
+    with torch.no_grad():
+        init_batch = next(iter(train_loader)).to(device)
+        init_batch = init_batch.unsqueeze(1).unsqueeze(2)
+        init_samples = init_batch.reshape(-1, 384)[:num_codes]
+        
+        # Repeat if needed
+        if init_samples.size(0) < num_codes:
+            repeats = (num_codes + init_samples.size(0) - 1) // init_samples.size(0)
+            init_samples = init_samples.repeat(repeats, 1)[:num_codes]
+        
+        model.vq.codebook.weight.data.copy_(init_samples)
+        model.vq.ema_weight.copy_(init_samples)
+    print(f"CODEBOOK INITIALIZED")
     
-    # PRECISION
-    scaler = torch.amp.GradScaler() if device == 'cuda' else None
+    # NO OPTIMIZER NEEDED - EMA updates codebook without gradients
+    print(f"NOTE: Using EMA updates (no gradient-based training)")
     
     """ TRAINING LOOP"""
     train_losses = []
@@ -155,23 +167,9 @@ def train_vq(
             batch = batch.to(device)
             # Add spatial dimensions: [B, 384] -> [B, 1, 1, 384]
             batch = batch.unsqueeze(1).unsqueeze(2)
-            optimizer.zero_grad()
             
-            if scaler:
-                # MIXED PRECISION FOR CUDA
-                with torch.amp.autocast('cuda'):
-                    z_quantized, loss, tokens = model(batch)
-                
-                # SCALED BACKPROPAGATION
-                scaler.scale(loss).backward()
-                scaler.step(optimizer)
-                scaler.update()
-            
-            else:
-                # STANDARD PRECISION FOR CPU
-                z_quantized, loss, tokens = model(batch)
-                loss.backward()
-                optimizer.step()
+            # Forward pass (EMA updates codebook automatically)
+            z_quantized, loss, tokens = model(batch)
             
             train_loss += loss.item()
             train_tokens_all.append(tokens.cpu().detach())
