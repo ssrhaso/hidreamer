@@ -156,7 +156,7 @@ def train_vq(
             
             if scaler:
                 # MIXED PRECISION FOR CUDA
-                with torch.amp.autocast():
+                with torch.amp.autocast('cuda'):
                     z_quantized, loss, tokens = model(batch)
                 
                 # SCALED BACKPROPAGATION
