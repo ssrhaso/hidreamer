@@ -11,7 +11,7 @@ from torch.utils.data import Dataset, DataLoader, random_split
 from tqdm import tqdm
 from vq import VQVAE, VQTokenizer, load_config
 
-config = load_config("configs/vq.yaml")
+
 
 class EmbeddingDataset(Dataset):
     """ DATASET WRAPPER FOR DINOv2 EMBEDDINGS
@@ -150,6 +150,8 @@ def train_vq(
         
         for batch in pbar:
             batch = batch.to(device)
+            # Add spatial dimensions: [B, 384] -> [B, 1, 1, 384]
+            batch = batch.unsqueeze(1).unsqueeze(2)
             optimizer.zero_grad()
             
             if scaler:
@@ -184,6 +186,8 @@ def train_vq(
         with torch.no_grad():
             for batch in val_loader:
                 batch = batch.to(device)
+                # Add spatial dimensions: [B, 384] -> [B, 1, 1, 384]
+                batch = batch.unsqueeze(1).unsqueeze(2)
                 z_quantized, loss, tokens = model(batch)
                 val_loss += loss.item()
                 val_tokens_all.append(tokens.cpu())
@@ -229,6 +233,8 @@ def train_vq(
     with torch.no_grad():
         for batch in tqdm(full_loader, desc="Tokenizing Full Dataset"):
             batch = batch.to(device)
+            # Add spatial dimensions: [B, 384] -> [B, 1, 1, 384]
+            batch = batch.unsqueeze(1).unsqueeze(2)
             tokens = model.encode(batch)
             all_tokens.append(tokens.cpu())
     
@@ -241,6 +247,8 @@ def train_vq(
     
     with torch.no_grad():
         sample_batch = next(iter(full_loader)).to(device)
+        # Add spatial dimensions: [B, 384] -> [B, 1, 1, 384]
+        sample_batch = sample_batch.unsqueeze(1).unsqueeze(2)
         z_quantized, _, _ = model(sample_batch)
         quantized_stats = {
             'mean': float(z_quantized.mean().item()),
@@ -295,5 +303,20 @@ def train_vq(
     
     return model, all_tokens, stats
 
-
+if __name__ == "__main__":
+    
+    config = load_config("configs/vq.yaml")
+    
+    train_vq(
+        embeddings_path = config['data']['embeddings_path'],
+        output_dir = config['training'].get('save_dir', 'checkpoints'),
+        num_codes = config['model']['num_codes'],
+        latent_dim = config['model']['latent_dim'],
+        commitment_cost = config['model']['commitment_cost'],
+        batch_size = config['training']['batch_size'],
+        num_epochs = config['training']['num_epochs'],
+        learning_rate = config['training']['learning_rate'],
+        val_split = config['training']['val_split'],
+        seed = config['seed'],
+    )
 
