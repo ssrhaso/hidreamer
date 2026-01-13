@@ -70,8 +70,8 @@ def extract_embeddings(
             # EXTRACT EMBEDDINGS
             batch_embeddings = encoder.extract_batch(batch_frames) # SHAPE (B, 384)
             
-            # STORE EMBEDDINGS
-            embeddings[start_idx:end_idx] = batch_embeddings
+            # STORE EMBEDDINGS (MOVE FROM GPU TO CPU TO NUMPY)
+            embeddings[start_idx:end_idx] = batch_embeddings.cpu().numpy()
             
             # UPDATE PROGRESS BAR
             batch_count = end_idx - start_idx
