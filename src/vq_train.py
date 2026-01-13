@@ -43,7 +43,9 @@ def compute_codebook_stats(
     token_probs = token_counts / token_counts.sum()
     
     # PERPLEXITY (EFFECTIVE NUMBER OF CODES USED)
-    perplexity = torch.exp(-torch.sum(token_probs * torch.log(token_probs + 1e-10))).item()
+    token_probs_nonzer = token_probs[token_probs > 0]
+    entropy = -torch.sum(token_probs_nonzer * torch.log(token_probs_nonzer))
+    perplexity = torch.exp(entropy).item()
     
     # HISTOGRAM 
     usage_histogram = token_counts.cpu().numpy().tolist()
