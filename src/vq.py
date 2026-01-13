@@ -16,37 +16,6 @@ def load_config(
     return config
 
 
-class ProjectionMLP(nn.Module):
-    """ PROJECT 384-DIM DINOv2 EMBEDDINGS TO 128-DIM LATENT DIMENSION FOR VQ-VAE """
-
-    def __init__(
-        self,
-        input_dim : int = 384,
-        output_dim : int = 128,
-    ):
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(input_dim, 256),
-            nn.LayerNorm(256),
-            nn.GELU(),
-            nn.Linear(256, output_dim),
-            nn.LayerNorm(output_dim),
-        )
-
-    def forward(
-        self,
-        x : torch.Tensor,
-    ):
-        """ FORWARD PASS THROUGH PROJECTION MLP (384->128) """
-        return self.net(x)
-
-
-
-
-
-
-
-
 class VQVAE(nn.Module):
     """ VQ-VAE MODULE FOR VECTOR QUANTIZATION AND DISCRETE TOKENIZATION OF LATENT EMBEDDINGS """
     def __init__(
@@ -94,7 +63,7 @@ class VQVAE(nn.Module):
         indices = torch.argmin(distances, dim=1)
         z_quantized = self.codebook(indices)
 
-        # UPDATE CODEBOOK WITH EMA (only during training)
+        # UPDATE CODEBOOK WITH EMA (only during training)  
         if self.training:
             self._ema_update(z_flat, indices)
 
@@ -134,7 +103,6 @@ class VQTokenizer(nn.Module):
     def __init__(
         self,
         input_dim : int = 384,
-        latent_dim : int = 128,  # ignored - using input_dim
         num_codes : int = 256,
         commitment_cost : float = 0.25,
     ):
