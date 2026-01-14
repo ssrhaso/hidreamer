@@ -57,11 +57,8 @@ class FrozenDinoV2Encoder(nn.Module):
         # ASSERT SHAPE 
         assert frame.shape == (84, 84), f"EXPECTED FRAME SHAPE (84,84), GOT {frame.shape}" 
 
-        # CONVERT UINT8 [0, 255] -> float32 [0.0, 1.0]
-        frame_float = frame.astype(np.float32) / 255.0
-
         # CONVERT GRAYSCALE -> RGB
-        frame_rgb = np.repeat(frame_float[:, :, np.newaxis], 3, axis = 2)  
+        frame_rgb = np.stack([frame, frame, frame], axis=2)  # SHAPE (84, 84, 3) , uint8
 
         return frame_rgb
     
