@@ -28,6 +28,9 @@ class ReplayBuffer:
         self.next_states = np.zeros( (max_size, *state_shape), dtype = np.uint8)
         self.dones = np.zeros(max_size, dtype = bool)
 
+        # EPISODE BOUNDARY TRACKING (for temporal differencing)
+        self.episode_starts = []  # List of indices where episodes start
+
         # EPISODES
         self.episode_returns = []
         self.episode_lengths = []
@@ -41,14 +44,23 @@ class ReplayBuffer:
         reward,
         next_state,
         done,
+        is_episode_start : bool = False,
     ):
-        """ STORE SINGLE TRANSITION IN THE BUFFER (state, action, reward, next_state, done), UPDATE POINTER AND FULL FLAG """
+        """ STORE SINGLE TRANSITION IN THE BUFFER (state, action, reward, next_state, done), UPDATE POINTER AND FULL FLAG 
+        
+        Args:
+            is_episode_start: True if this is the first frame of a new episode
+        """
 
         self.states[self.ptr] = state
         self.actions[self.ptr] = action
         self.rewards[self.ptr] = reward
         self.next_states[self.ptr] = next_state
         self.dones[self.ptr] = done
+
+        # TRACK EPISODE BOUNDARIES
+        if is_episode_start:
+            self.episode_starts.append(self.ptr)
 
 
         self.ptr = (self.ptr + 1) % self.max_size # CIRCULAR BUFFER
@@ -70,8 +82,10 @@ class ReplayBuffer:
             rewards = self.rewards,
             next_states = self.next_states,
             dones = self.dones,
+            episode_starts = np.array(self.episode_starts),  # Save episode boundaries
         )
         print(f"REPLAY BUFFER SAVED TO {filepath}")
+        print(f"SAVED {len(self.episode_starts)} EPISODE BOUNDARIES")
 
 
     def __len__(self):
@@ -107,6 +121,7 @@ def collect_episodes(
         
         obs, _ = env.reset()
         episode_return = 0
+        is_first_frame = True  # Track first frame of episode
 
         while True:
             # ACTION (RANDOM)
@@ -125,7 +140,10 @@ def collect_episodes(
                 reward = float(reward),
                 next_state = next_obs.astype(np.uint8),
                 done = bool(done),
+                is_episode_start = is_first_frame,  # Mark episode boundaries
             )
+            
+            is_first_frame = False  # Only first frame is episode start
 
             # UPDATE COUNTERS
             total_transitions += 1

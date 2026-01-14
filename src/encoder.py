@@ -32,7 +32,7 @@ class FrozenDinoV2Encoder(nn.Module):
             parameter.requires_grad = False
 
         self.model.eval()
-        self.embedding_dim = 384 #DINOv2-VIT-SMALL EMBEDDING DIMENSION
+        self.embedding_dim = 384 # DINOv2-VIT-SMALL EMBEDDING DIMENSION
         
         # LOGGING
         print(f"LOADED {model_name}")
@@ -97,6 +97,9 @@ class FrozenDinoV2Encoder(nn.Module):
 
         INPUT : BATCH OF FRAMES SHAPE (B, 84, 84) OR (B, 4, 84, 84)
         OUTPUT : BATCH OF EMBEDDINGS SHAPE (B, 384)
+        
+        NOTE: Temporal differencing should be done later with proper
+              episode boundary information, not at batch level.
         """
 
         # PREPROCESS FRAMES
