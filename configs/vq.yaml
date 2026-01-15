@@ -2,9 +2,9 @@
 
 data:
   embeddings_paths:
-  - 'data/encoder_embeddings_ALE_Pong-v5_cnn.npz'
-  - 'data/encoder_embeddings_ALE_Breakout-v5_cnn.npz'
-  - "data/encoder_embeddings_ALE_MsPacman-v5_cnn.npz"
+  - 'data/embeddings_ALE_Pong-v5_cnn.npy'
+  - 'data/embeddings_ALE_Breakout-v5_cnn.npy'
+  - "data/embeddings_ALE_MsPacman-v5_cnn.npy"
   output_dir: 'data'
 
 model:
