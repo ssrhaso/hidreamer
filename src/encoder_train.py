@@ -101,7 +101,7 @@ def contrastive_loss(
 
 
 def train_encoder(
-    data_path: str = 'data/replay_buffer_ALE_Pong-v5.npz',
+    data_paths: list = ['data/replay_buffer_ALE_PongNoFrameskip-v4.npz', 'data/replay_buffer_ALE_BreakoutNoFrameskip-v4.npz', 'data/replay_buffer_ALE_SpaceInvadersNoFrameskip-v4.npz'],
     num_epochs: int = 30,
     batch_size: int = 256,
     learning_rate: float = 3e-4,
@@ -113,7 +113,7 @@ def train_encoder(
     Train CNN encoder with contrastive learning
     
     Args:
-        data_path: Path to replay buffer
+        data_paths: List of paths to replay buffers
         num_epochs: Number of training epochs
         batch_size: Training batch size
         learning_rate: Adam learning rate
@@ -126,21 +126,30 @@ def train_encoder(
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     Path(save_dir).mkdir(exist_ok=True, parents=True)
     
-    print("=" * 70)
+    print("-" * 70)
     print("TRAINING ATARI CNN ENCODER")
-    print("=" * 70)
     print(f"\nDevice: {device}")
     print(f"Start time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     
     # Load data
-    print(f"\nLoading data from {data_path}...")
-    with np.load(data_path) as data:
-        frames = data['states']  # (100000, 4, 84, 84)
-    
-    print(f"Loaded frames: {frames.shape}")
+    # Load and concatenate data from multiple games
+    print(f"\nLoading data from {len(data_paths)} game(s)...")
+    all_frames = []
+
+    for i, path in enumerate(data_paths, 1):
+        print(f"  [{i}/{len(data_paths)}] Loading {path}...")
+        with np.load(path) as data:
+            game_frames = data['states']
+        print(f"      → {game_frames.shape[0]:,} frames")
+        all_frames.append(game_frames)
+    # Concatenate along batch dimension
+    frames = np.concatenate(all_frames, axis=0)
+
+    print(f"\nCombined Dataset:")
+    print(f"  Total frames: {frames.shape[0]:,}")
     print(f"  Shape: {frames.shape}")
+    print(f"  Memory: {frames.nbytes / 1024**3:.2f} GB")
     print(f"  Dtype: {frames.dtype}")
-    print(f"  Range: [{frames.min()}, {frames.max()}]")
     
     # Create dataset
     print(f"\nCreating dataset...")
@@ -297,7 +306,7 @@ if __name__ == "__main__":
     
     # Train encoder
     model = train_encoder(
-        data_path=config['data']['replay_buffer'],
+        data_paths=config['data']['replay_buffers'],
         num_epochs=config['training']['num_epochs'],
         batch_size=config['training']['batch_size'],
         learning_rate=config['training']['learning_rate'],
