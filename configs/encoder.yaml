@@ -5,7 +5,7 @@ data:
   replay_buffers: 
   - "data/replay_buffer_ALE_PongNoFrameskip-v4.npz"
   - "data/replay_buffer_ALE_BreakoutNoFrameskip-v4.npz"
-  - "data/replay_buffer_ALE_SpaceInvadersNoFrameskip-v4.npz"
+  - "data/replay_buffer_ALE_MsPacmanNoFrameskip-v4.npz"
 
   temporal_distance: 1  # Frames apart for positive pairs
 

@@ -4,7 +4,7 @@ data:
   embeddings_paths:
   - 'data/encoder_embeddings_ALE_PongNoFrameskip-v4_cnn.npz'
   - 'data/encoder_embeddings_ALE_BreakoutNoFrameskip-v4_cnn.npz'
-  - 'data/encoder_embeddings_ALE_SpaceInvadersNoFrameskip-v4_cnn.npz'
+  - "data/encoder_embeddings_ALE_MsPacmanNoFrameskip-v4_cnn.npz"
   output_dir: 'data'
 
 model:
