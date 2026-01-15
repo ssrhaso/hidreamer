@@ -2,9 +2,9 @@
 
 data:
   embeddings_paths:
-  - 'data/encoder_embeddings_ALE_PongNoFrameskip-v4_cnn.npz'
-  - 'data/encoder_embeddings_ALE_BreakoutNoFrameskip-v4_cnn.npz'
-  - "data/encoder_embeddings_ALE_MsPacmanNoFrameskip-v4_cnn.npz"
+  - 'data/encoder_embeddings_ALE_Pong-v5_cnn.npz'
+  - 'data/encoder_embeddings_ALE_Breakout-v5_cnn.npz'
+  - "data/encoder_embeddings_ALE_MsPacman-v5_cnn.npz"
   output_dir: 'data'
 
 model:
