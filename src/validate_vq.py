@@ -294,7 +294,7 @@ def main():
     print("=" * 60)
     
     # Paths
-    checkpoint_path = 'checkpoints/vq_model_best_3games.pth'
+    checkpoint_path = 'checkpoints/vq_model_best.pth'
     embeddings_paths = {
         'Pong': 'data/embeddings_ALE_Pong-v5_cnn.npy',
         'Breakout': 'data/embeddings_ALE_Breakout-v5_cnn.npy',
