@@ -1,0 +1,19 @@
+{
+  "reconstruction": {
+    "cosine_similarity_mean": 0.40227678418159485,
+    "cosine_similarity_std": 0.14917942881584167,
+    "l2_distance_mean": 0.7575960755348206
+  },
+  "temporal": {
+    "temporal_smoothness": 0.8106810681068107,
+    "token_change_rate": 0.1893,
+    "avg_run_length": 5.279978869519281
+  },
+  "codebook": {
+    "num_used_codes": 256,
+    "perplexity": 240.24916600009556
+  },
+  "multi_game": {
+    "shared_tokens": 33
+  }
+}
