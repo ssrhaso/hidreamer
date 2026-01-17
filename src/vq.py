@@ -141,4 +141,16 @@ class VQTokenizer(nn.Module):
             z_quantized = self.vq.codebook(tokens)
         return z_quantized
     
-          
+
+class HRVQTokenizer(nn.Module):
+    """
+    3 LAYER HIERARCHICAL VQ TOKENIZER MODULE 
+    INSPIRED BY HiTVideo (2025), SoundStream (2021)
+    
+    ARCHITECTURE:
+    - LAYER 0 : Coarse/Shared representations (global physics, motion etc.)
+    - LAYER 1 : Mid-level representations (mechanics, appearance)
+    - LAYER 2 : Fine-grained details (precise motions, pixel level details)
+    
+    EACH LAYER HAS ITS OWN VQ-VAE WITH EMA UPDATES (NO PROJECTION/DECODER)
+    """
