@@ -95,8 +95,83 @@ class VQVAE(nn.Module):
         
         # Normalize and update codebook
         self.codebook.weight.data.copy_(self.ema_weight / cluster_size.unsqueeze(1))
+
+
+class HRVQTokenizer(nn.Module):
+    """
+    3 LAYER HIERARCHICAL VQ TOKENIZER MODULE 
+    INSPIRED BY HiTVideo (2025), SoundStream (2021)
     
+    ARCHITECTURE:
+    - LAYER 0 : Coarse/Shared representations (global physics, motion etc.)
+    - LAYER 1 : Mid-level representations (mechanics, appearance)
+    - LAYER 2 : Fine-grained details (precise motions, pixel level details)
     
+    EACH LAYER HAS ITS OWN VQ-VAE WITH EMA UPDATES (NO PROJECTION/DECODER)
+    """
+
+    def __init__(
+        self,
+        input_dim : int = 384,
+        num_codes_per_layer : int = 256,
+        num_layers : int = 3,
+        commitment_costs : list = None,
+        decay : float = 0.99,
+        epsilon : float = 1e-5,
+    ):
+        super().__init__()
+        self.input_dim = input_dim
+        self.num_layers = num_layers
+        self.num_codes_per_layer = num_codes_per_layer
+        
+        # LAYER SPECIFIC COMMITMENT COSTS 
+        if commitment_costs is None:
+            commitment_costs = [0.10, 0.25, 0.50]
+    
+        assert len(commitment_costs) == num_layers, "Length of commitment_costs must match num_layers"
+                    
+        # CREATE VQ-VAE LAYERS
+        
+        self.vq_layers = nn.ModuleList([
+            VQVAE(
+                num_codebook_entries = num_codes_per_layer,
+                codebook_dim = input_dim,
+                commitment_cost = commitment_costs[layer],
+                decay = decay,
+                epsilon = epsilon,
+            ) for layer in range(num_layers)
+        ])
+        
+        # TRACK
+        self.total_capacity = num_codes_per_layer * num_layers
+    
+        
+    def forward(
+        self,
+        embeddings : torch.Tensor,
+    ):
+        """ FORWARD PASS THROUGH HIERARCHICAL VQ TOKENIZER """
+        
+        
+    def encode(
+        self,
+        embeddings : torch.Tensor,
+    ):
+        """ ENCODE INPUT EMBEDDINGS TO HIERARCHICAL DISCRETE TOKEN INDICES (NO GRADIENTS) """
+    
+    def decode(
+        self,
+        all_tokens: list,
+    ):
+        """ DECODE HIERARCHICAL DISCRETE TOKEN INDICES BACK TO CONTINUOUS LATENT EMBEDDINGS (QUANTIZED VECTORS)"""
+        
+    def get_codebook_usage(
+        self, 
+        all_tokens: list
+    ):
+        """ ANALYZE WHICH CODEBOOK ENTRIES ARE USED PER LAYER """
+        
+
 class VQTokenizer(nn.Module):
     """ COMPLETE VQ TOKENIZER MODULE: DIRECT VQ ON 384D WITH EMA """
     
@@ -141,16 +216,3 @@ class VQTokenizer(nn.Module):
             z_quantized = self.vq.codebook(tokens)
         return z_quantized
     
-
-class HRVQTokenizer(nn.Module):
-    """
-    3 LAYER HIERARCHICAL VQ TOKENIZER MODULE 
-    INSPIRED BY HiTVideo (2025), SoundStream (2021)
-    
-    ARCHITECTURE:
-    - LAYER 0 : Coarse/Shared representations (global physics, motion etc.)
-    - LAYER 1 : Mid-level representations (mechanics, appearance)
-    - LAYER 2 : Fine-grained details (precise motions, pixel level details)
-    
-    EACH LAYER HAS ITS OWN VQ-VAE WITH EMA UPDATES (NO PROJECTION/DECODER)
-    """
