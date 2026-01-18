@@ -5,6 +5,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import yaml
+import numpy as np
 
 def load_config(
     config_path : str = "configs/vq.yaml",
@@ -202,13 +203,29 @@ class HRVQTokenizer(nn.Module):
             z_final = sum(quantized_layers)
         
         return z_final
-    
         
     def get_codebook_usage(
         self, 
         all_tokens: list
     ):
         """ ANALYZE WHICH CODEBOOK ENTRIES ARE USED PER LAYER """
+        usage_stats = []
+        for layer_idx, tokens in enumerate(all_tokens):
+            if isinstance(tokens, torch.Tensor):
+                tokens_np = tokens.cpu().numpy()
+            else:
+                tokens_np = tokens
+            
+            unique_codes = len(np.unique(tokens_np))
+            usage_percentage = (unique_codes / self.num_codes_per_layer) * 100
+            
+            usage_stats.append({
+                'layer': layer_idx,
+                'unique_codes': unique_codes,
+                'total_codes': self.num_codes_per_layer,
+                'usage_percentage': usage_percentage,
+            })
+        return usage_stats
         
 
 class VQTokenizer(nn.Module):
