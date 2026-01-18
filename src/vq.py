@@ -180,12 +180,29 @@ class HRVQTokenizer(nn.Module):
         embeddings : torch.Tensor,
     ):
         """ ENCODE INPUT EMBEDDINGS TO HIERARCHICAL DISCRETE TOKEN INDICES (NO GRADIENTS) """
+        with torch.no_grad():
+            _, _, all_tokens = self.forward(embeddings)
+        return all_tokens
     
+
+        
     def decode(
         self,
         all_tokens: list,
     ):
         """ DECODE HIERARCHICAL DISCRETE TOKEN INDICES BACK TO CONTINUOUS LATENT EMBEDDINGS (QUANTIZED VECTORS)"""
+        
+        with torch.no_grad():
+            quantized_layers = []
+            for layer_idx, tokens in enumerate(all_tokens):
+                z_quantized = self.vq_layers[layer_idx].codebook(tokens)
+                quantized_layers.append(z_quantized)
+            
+            # FINAL RECONSTRUCTION = SUM OF QUANTIZED LAYERS
+            z_final = sum(quantized_layers)
+        
+        return z_final
+    
         
     def get_codebook_usage(
         self, 
