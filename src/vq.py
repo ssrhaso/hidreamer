@@ -151,6 +151,28 @@ class HRVQTokenizer(nn.Module):
         embeddings : torch.Tensor,
     ):
         """ FORWARD PASS THROUGH HIERARCHICAL VQ TOKENIZER """
+        residual = embeddings
+        quantized_layers = []
+        all_indices = []
+        total_loss = 0.0
+        
+        for layer_idx, vq_layer in enumerate(self.vq_layers):
+            # QUANTIZE CURRENT RESIDUAL LAYER
+            
+            z_quantized, layer_loss, indices = vq_layer(residual)
+            
+            # STORE
+            quantized_layers.append(z_quantized)
+            all_indices.append(indices)
+            total_loss += layer_loss
+            
+            # UPDATE RESIDUAL FOR NEXT LAYER
+            residual = residual - z_quantized
+        
+        # FINAL RECONSTRUCTION = SUM OF QUANTIZED LAYERS
+        z_final = sum(quantized_layers)
+        
+        return z_final, total_loss, all_indices
         
         
     def encode(
@@ -215,4 +237,5 @@ class VQTokenizer(nn.Module):
         with torch.no_grad():
             z_quantized = self.vq.codebook(tokens)
         return z_quantized
+    
     
