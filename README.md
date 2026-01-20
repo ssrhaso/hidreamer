@@ -1,4 +1,4 @@
-Trained lightweight CNN Encoder + discrete tokenization with 3 layer Hierarchical Residual Visual Quantizer + attention dynamics = sample-efficient Atari control on a single GPU. Research engineering sprint combining three validated techniques in a novel architecture
+Trained lightweight CNN Encoder + discrete tokenization with 3 layer Hierarchical Residual Visual Quantizer + World Model transformer attention dynamics = sample-efficient Atari control on a single GPU. Research engineering sprint combining three validated techniques in a novel architecture
 
 ## Results (AT PRESENT)
 
