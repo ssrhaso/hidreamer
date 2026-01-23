@@ -16,20 +16,21 @@ import matplotlib.pyplot as plt
 from collections import Counter
 from tqdm import tqdm
 
-from vq import VQTokenizer
+from vq import VQTokenizer, HRVQTokenizer
 
 
 def load_model(checkpoint_path: str, device: str = 'cpu'):
-    """Load trained VQ model"""
-    model = VQTokenizer(
+    """Load trained HRVQ model"""
+    model = HRVQTokenizer(
         input_dim=384,
-        num_codes=256,
-        commitment_cost=0.25,
+        num_codes_per_layer=256,
+        num_layers=3,
+        commitment_costs=[0.15, 0.25, 0.40],
     ).to(device)
     
     model.load_state_dict(torch.load(checkpoint_path, map_location=device))
     model.eval()
-    print(f"✓ Loaded VQ model from {checkpoint_path}")
+    print(f"✓ Loaded HRVQ model (3 layers) from {checkpoint_path}")
     return model
 
 
@@ -89,9 +90,10 @@ def test_temporal_consistency(model, embeddings, window_size=10000):
     x = x.unsqueeze(1).unsqueeze(2)
     
     with torch.no_grad():
-        _, _, tokens = model(x)
+        _, _, tokens_list = model(x)
     
-    tokens = tokens.squeeze().cpu().numpy()
+    # Analyze Layer 0 (coarse/shared layer) for temporal consistency
+    tokens = tokens_list[0].squeeze().cpu().numpy()
     
     # Compute token similarity between consecutive frames
     same_token = (tokens[:-1] == tokens[1:]).astype(float)
@@ -132,13 +134,14 @@ def test_temporal_consistency(model, embeddings, window_size=10000):
 
 
 def test_codebook_statistics(model, embeddings):
-    """Full codebook usage analysis"""
-    print("\n=== Test 3: Codebook Statistics ===")
+    """Full codebook usage analysis (per-layer for HRVQ)"""
+    print("\n=== Test 3: Codebook Statistics (Per Layer) ===")
     
     device = next(model.parameters()).device
+    num_layers = model.num_layers
     
     # Tokenize all embeddings
-    all_tokens = []
+    all_tokens_by_layer = [[] for _ in range(num_layers)]
     batch_size = 512
     
     for i in tqdm(range(0, len(embeddings), batch_size), desc="  Tokenizing"):
@@ -147,50 +150,59 @@ def test_codebook_statistics(model, embeddings):
         x = x.unsqueeze(1).unsqueeze(2)
         
         with torch.no_grad():
-            tokens = model.encode(x)
+            tokens_list = model.encode(x)
         
-        all_tokens.append(tokens.squeeze().cpu().numpy())
+        for layer_idx, tokens in enumerate(tokens_list):
+            all_tokens_by_layer[layer_idx].append(tokens.squeeze().cpu().numpy())
     
-    all_tokens = np.concatenate(all_tokens)
+    # Concatenate per layer
+    all_tokens_by_layer = [np.concatenate(layer_tokens) for layer_tokens in all_tokens_by_layer]
     
-    # Count token frequencies
-    token_counts = Counter(all_tokens.flatten())
-    num_used = len(token_counts)
+    # Analyze each layer
+    layer_results = []
+    for layer_idx, all_tokens in enumerate(all_tokens_by_layer):
+        print(f"\n  Layer {layer_idx}:")
+        
+        # Count token frequencies
+        token_counts = Counter(all_tokens.flatten())
+        num_used = len(token_counts)
+        
+        # Perplexity
+        total = len(all_tokens)
+        token_probs = np.array([token_counts.get(i, 0) / total for i in range(256)])
+        token_probs_nonzero = token_probs[token_probs > 0]
+        entropy = -np.sum(token_probs_nonzero * np.log(token_probs_nonzero + 1e-10))
+        perplexity = np.exp(entropy)
+        
+        print(f"    Codebook usage:    {num_used}/256 ({num_used/256*100:.1f}%)")
+        print(f"    Perplexity:        {perplexity:.2f} (max: 256)")
+        print(f"    Effective usage:   {perplexity/256*100:.1f}% of theoretical max")
+        
+        # Token distribution statistics
+        frequencies = list(token_counts.values())
+        print(f"    Token freq (min/max): {min(frequencies)} / {max(frequencies)}")
+        print(f"    Token freq (mean):    {np.mean(frequencies):.1f} ± {np.std(frequencies):.1f}")
+        
+        # Pass/fail
+        if num_used == 256 and perplexity > 200:
+            print("     PASS: Excellent codebook utilization")
+        elif num_used >= 240 and perplexity > 150:
+            print("     ACCEPTABLE: Good codebook utilization")
+        else:
+            print("     FAIL: Codebook collapse detected")
+        
+        layer_results.append({
+            'layer': layer_idx,
+            'num_used_codes': int(num_used),
+            'perplexity': float(perplexity),
+        })
     
-    # Perplexity
-    total = len(all_tokens)
-    token_probs = np.array([token_counts[i] / total for i in range(256)])
-    token_probs_nonzero = token_probs[token_probs > 0]
-    entropy = -np.sum(token_probs_nonzero * np.log(token_probs_nonzero))
-    perplexity = np.exp(entropy)
-    
-    print(f"  Codebook usage:    {num_used}/256 ({num_used/256*100:.1f}%)")
-    print(f"  Perplexity:        {perplexity:.2f} (max: 256)")
-    print(f"  Effective usage:   {perplexity/256*100:.1f}% of theoretical max")
-    
-    # Token distribution statistics
-    frequencies = list(token_counts.values())
-    print(f"  Token freq (min/max): {min(frequencies)} / {max(frequencies)}")
-    print(f"  Token freq (mean):    {np.mean(frequencies):.1f} ± {np.std(frequencies):.1f}")
-    
-    # Pass/fail
-    if num_used == 256 and perplexity > 200:
-        print("   PASS: Excellent codebook utilization")
-    elif num_used >= 240 and perplexity > 150:
-        print("   ACCEPTABLE: Good codebook utilization")
-    else:
-        print("   FAIL: Codebook collapse detected")
-    
-    return {
-        'num_used_codes': int(num_used),
-        'perplexity': float(perplexity),
-        'token_counts': dict(token_counts),
-    }
+    return {'layers': layer_results}
 
 
 def test_multi_game_separation(model, embeddings_dict):
-    """Test if different games use different token distributions"""
-    print("\n=== Test 4: Multi-Game Token Distribution ===")
+    """Test if different games use different token distributions (Layer 0 = shared vocabulary)"""
+    print("\n=== Test 4: Multi-Game Token Distribution (Layer 0 Analysis) ===")
     
     device = next(model.parameters()).device
     game_tokens = {}
@@ -201,9 +213,10 @@ def test_multi_game_separation(model, embeddings_dict):
         x = x.unsqueeze(1).unsqueeze(2)
         
         with torch.no_grad():
-            tokens = model.encode(x)
+            tokens_list = model.encode(x)
         
-        game_tokens[game_name] = tokens.squeeze().cpu().numpy()
+        # Use Layer 0 (coarse/shared layer) for cross-game analysis
+        game_tokens[game_name] = tokens_list[0].squeeze().cpu().numpy()
     
     # Compare token distributions
     print("\n  Token distribution overlap:")
@@ -337,18 +350,21 @@ def main():
     x = torch.from_numpy(embeddings_dict['Pong'][:10000]).float().to(device_cpu)
     x = x.unsqueeze(1).unsqueeze(2)
     with torch.no_grad():
-        tokens = model.encode(x).squeeze().cpu().numpy()
-    visualize_token_patterns(tokens)
+        tokens_list = model.encode(x)
+    # Visualize Layer 0 (coarse/shared patterns)
+    visualize_token_patterns(tokens_list[0].squeeze().cpu().numpy())
     
     # Final summary
     print("\n" + "=" * 60)
-    print("VALIDATION SUMMARY")
+    print("VALIDATION SUMMARY (HRVQ)")
     print("=" * 60)
     print(f"✓ Reconstruction quality:  {results['reconstruction']['cosine_similarity_mean']:.4f}")
     print(f"✓ Temporal consistency:    {results['temporal']['temporal_smoothness']:.4f}")
-    print(f"✓ Codebook usage:          {results['codebook']['num_used_codes']}/256")
-    print(f"✓ Perplexity:              {results['codebook']['perplexity']:.2f}")
-    print(f"✓ Shared tokens:           {results['multi_game']['shared_tokens']}/256")
+    print(f"✓ Layer 0 codebook usage:  {results['codebook']['layers'][0]['num_used_codes']}/256")
+    print(f"✓ Layer 0 perplexity:      {results['codebook']['layers'][0]['perplexity']:.2f}")
+    print(f"✓ Layer 1 codebook usage:  {results['codebook']['layers'][1]['num_used_codes']}/256")
+    print(f"✓ Layer 2 codebook usage:  {results['codebook']['layers'][2]['num_used_codes']}/256")
+    print(f"✓ Shared tokens (Layer 0): {results['multi_game']['shared_tokens']}/256")
     print("=" * 60)
     
     # Save results
