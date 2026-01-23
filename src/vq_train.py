@@ -9,7 +9,7 @@ import torch.nn as nn
 import torch.utils.data as data
 from torch.utils.data import Dataset, DataLoader, random_split
 from tqdm import tqdm
-from vq import VQVAE, VQTokenizer, load_config
+from vq import VQVAE, VQTokenizer, HRVQTokenizer, load_config
 
 
 
