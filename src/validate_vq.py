@@ -244,11 +244,11 @@ def test_multi_game_separation(model, embeddings_dict):
     print(f"\n  Shared tokens (all games): {len(shared)}/256")
     
     if len(shared) > 100:
-        print("  ✅ Strong shared vocabulary (good generalization)")
+        print("   Strong shared vocabulary (good generalization)")
     elif len(shared) > 50:
-        print("  ⚠️  Moderate shared vocabulary")
+        print("   Moderate shared vocabulary")
     else:
-        print("  ❌ Weak shared vocabulary (games may be too separated)")
+        print("   Weak shared vocabulary (games may be too separated)")
     
     return {
         'game_tokens': {k: v.tolist()[:1000] for k, v in game_tokens.items()},  # Save subset
