@@ -26,6 +26,7 @@ class VQVAE(nn.Module):
         commitment_cost : float = 0.25,
         decay : float = 0.99,
         epsilon : float = 1e-5,
+        layer_idx : int = 0,  # NEW: Track which layer this is for better init
     ):
         super().__init__()
         self.num_codebook_entries = num_codebook_entries
@@ -33,10 +34,13 @@ class VQVAE(nn.Module):
         self.commitment_cost = commitment_cost
         self.decay = decay
         self.epsilon = epsilon
+        self.layer_idx = layer_idx
         
-        # CREATE CODEBOOK AND INIT WEIGHTS 
-        self.codebook = nn.Embedding(num_codebook_entries, codebook_dim) 
-        self.codebook.weight.data.uniform_(-1 / num_codebook_entries, 1 / num_codebook_entries)
+        # CREATE CODEBOOK AND INIT WEIGHTS WITH LAYER-AWARE SCALING
+        self.codebook = nn.Embedding(num_codebook_entries, codebook_dim)
+        # Layer-aware initialization: coarse layers get wider range, fine layers narrower
+        init_scale = 1.0 / (num_codebook_entries * (1.0 + 0.5 * layer_idx))
+        self.codebook.weight.data.uniform_(-init_scale, init_scale)
         
         # EMA BUFFERS (not trained via gradients)
         self.register_buffer('ema_cluster_size', torch.zeros(num_codebook_entries))
@@ -125,9 +129,9 @@ class HRVQTokenizer(nn.Module):
         self.num_layers = num_layers
         self.num_codes_per_layer = num_codes_per_layer
         
-        # LAYER SPECIFIC COMMITMENT COSTS 
+        # LAYER SPECIFIC COMMITMENT COSTS (research-backed progression)
         if commitment_costs is None:
-            commitment_costs = [0.10, 0.25, 0.50]
+            commitment_costs = [0.15, 0.25, 0.40]  # Coarse→Fine (based on MAGVIT/SoundStream)
     
         assert len(commitment_costs) == num_layers, "Length of commitment_costs must match num_layers"
                     
@@ -140,11 +144,12 @@ class HRVQTokenizer(nn.Module):
                 commitment_cost = commitment_costs[layer],
                 decay = decay,
                 epsilon = epsilon,
+                layer_idx = layer,  # Pass layer index for better initialization
             ) for layer in range(num_layers)
         ])
         
-        # TRACK
-        self.total_capacity = num_codes_per_layer * num_layers
+        # TRACK EXPONENTIAL CAPACITY (not additive!)
+        self.total_capacity = num_codes_per_layer ** num_layers
     
         
     def forward(
