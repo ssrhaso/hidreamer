@@ -25,7 +25,11 @@ Trained lightweight CNN Encoder + discrete tokenization with 3 layer Hierarchica
 We successfully implemented and trained a 3-layer Hierarchical Residual VQ architecture inspired by HiTVideo (2025) and SoundStream (2021). The key innovation: aggressive layer-specific commitment costs `[0.05, 0.25, 0.60]` forced Layer 0 to capture coarse shared representations before passing residuals to game-specific layers. **Results exceeded expectations:** 125/256 shared tokens (49% of vocabulary) are now used across all three games, with ~53% average frame coverage - proving genuine cross-game semantic transfer. Reconstruction quality improved from 0.40 → 0.73 cosine similarity while maintaining 100% codebook utilization across all layers (perplexities: 240/229/228). The model learned that black backgrounds, motion primitives, and edge features are universal, while game-specific mechanics (paddle physics vs ghost AI vs brick patterns) occupy separate subspaces (assumption). This validates the hierarchical hypothesis: Atari games ARE transferable at the right abstraction level. **Status: Ready for world model training.**
 
 
+### WORLD MODEL:
 
+**Hierarchical Transformer with Adaptive Mixture-of-Experts (In Progress)**
+
+Building a discrete token world model combining TWISTER (ICLR 2025) and DreamerV4 innovations. **ATTEMPTING CONTRIBUTION** : first per-layer expert counts in world modeling, expected 2.8x inference speedup with 40% parameter reduction, temporal hierarchy matching semantic hierarchy, +15% long-horizon accuracy. Target: ~11M parameter model achieving <5ms inference for PPO imagination rollouts, enabling model-based RL with 10x sample efficiency over model-free baselines.
 
 ## Lessons Learned
 
