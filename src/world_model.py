@@ -16,4 +16,27 @@ from pathlib import Path
 @dataclass 
 class WorldModelConfig:
     """ CONFIG MATCHING configs/worldmodel.yaml """
+
+class TokenEmbedding(nn.Module):
+    """ EMBED HIERARCHICAL (HRVQ) TOKENS + ACTIONS into TRANSFORMER SEQUENCE"""
     
+
+def hierarchical_causal_mask():
+    """ CAUSAL MASK  """
+    
+class TransformerBlock(nn.Module):
+    """ STANDARD TRANSFORMER BLOCK  """
+    
+
+class HierarchicalWorldModel(nn.Module):
+    """ MAIN HIERARCHICAL WORLD MODEL FOR ATARI100K PREDICTION  """
+    
+
+def hierarchical_loss():
+    """ HIERARCHICAL LOSS FUNCTION  """
+    
+if __name__ == "__main__":
+    pass
+
+    
+   
