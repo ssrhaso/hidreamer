@@ -12,3 +12,8 @@ from dataclasses import dataclass
 from typing import Optional, Tuple, List
 import yaml
 from pathlib import Path
+
+@dataclass 
+class WorldModelConfig:
+    """ CONFIG MATCHING configs/worldmodel.yaml """
+    
