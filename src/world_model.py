@@ -45,7 +45,47 @@ class WorldModelConfig:
         assert self.max_seq_len % 4 == 0 , f"max_seq_len {self.max_seq_len} must be divisible by 4 (tokens per time step)"
 
 
+    @classmethod
+    def from_yaml(
+        cls,
+        path : str = "configs/worldmodel.yaml"
+    ):
+        """ LOAD CONFIG FROM YAML FILE  """
+        with open(path, 'r') as f:
+            cfg = yaml.safe_load(f)
+            
+        return cls(
+            # ARCHITECTURE
+            d_model = cfg['model']['d_model'],
+            n_layers = cfg['model']['n_layers'],
+            n_heads = cfg['model']['n_heads'],
+            d_ff = cfg['model']['d_ff'],
+            dropout = cfg['model']['dropout'],
+            max_seq_len = cfg['model']['max_seq_len'],
+            num_codes = cfg['model']['num_codes'],
+            num_actions = cfg['model']['num_actions'],
+            
+            # HIERARCHICAL LOSS
+            layer_weights = cfg['model']['layer_weights'],
+        )
+        
     
+    def __repr__(self):
+        return(
+            f"WORLD MODEL CONFIG:\n"
+            
+            f"  d_model: {self.d_model}\n"
+            f"  n_layers: {self.n_layers}\n"
+            f"  n_heads: {self.n_heads}\n"
+            f"  d_ff: {self.d_ff}\n"
+            f"  dropout: {self.dropout}\n"
+            f"  max_seq_len: {self.max_seq_len}\n"
+            f"  num_codes: {self.num_codes}\n"
+            f"  num_actions: {self.num_actions}\n"
+            f"  layer_weights: {self.layer_weights}\n"
+        )
+    
+
     
     
     
