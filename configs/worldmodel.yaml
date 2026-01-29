@@ -3,19 +3,17 @@
 model:
   # ARCHITECTURE - STORM INSPIRED [Zhang et al. 2023] 
 
-  d_model: 384 #384 = HRVQ embedding dimension
-  n_layers: 6 # 6 vs 8 layers
-  n_heads: 6  #d_model / n_heads = 64 dim per head
-  d_ff: 1536  # 4x d_model (standard)
-  dropout: 0.1 # standard (GPT-2, BERT)
-  max_seq_len: 256  # 64 timesteps × 4 tokens
-  
-  # TOKEN SPACES
-  num_codes: 256  # HRVQ codebook size
-  num_actions: 9  # Max Atari action space
-  
-  # HIERARCHICAL RSVQ LOSS WEIGHTS 
-  layer_weights: [1.0, 0.5, 0.1]  # L0 > L1 > L2
+    d_model :  384          # EMBEDDING DIMENSION (WIDTH OF NN)             - HRVQ EMBEDDING DIMENSION
+    n_layers :  6           # NUMBER OF TRANSFORMER BLOCKS (DEPTH OF NN)    - (Kaplan et al. 2020)
+    n_heads :  6            # NUMBER OF ATTENTION HEADS                     - (Vaswani et al. 2017) - standard rule of = d_model / 64
+    d_ff :  1536            # DIMENSION OF FEEDFORWARD NETWORK              - (Vaswani et al. 2017) - standard rule of = 4 * d_model
+    dropout :  0.1          # DROPOUT RATE                                  - (Devlin et al. 2017)  - BERT, GPT, STORM use 0.1       
+    max_seq_len :  256      # MAXIMUM SEQUENCE LENGTH                       - ~ 65k positions of memory, Fits T4 GPU safely
+    num_codes :  256        # NUMBER OF CODEBOOK ENTRIES                    - HRVQ Codebook Size
+    num_actions :  9        # NUMBER OF POSSIBLE ACTIONS                    - ATARI100K has 9 discrete actions
+    
+    # HIERARCHICAL LOSS (NOVELTY)
+    layer_weights : None
 
 
 # TRAINING
