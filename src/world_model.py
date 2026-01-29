@@ -28,15 +28,16 @@ class WorldModelConfig:
     
     # HIERARCHICAL LOSS (NOVELTY) 
     
-    # e.g.: layer_weights = [1.0, 0.5, 0.1] for 3-layer HRVQ: L2, L1 and L0. 
-    # HIGHER WEIGHTING FOR L2 (FINAL PIXEL RECONSTRUCTION), LOWER FOR L0 (COARSE , ABSTRACT REPRESENTATION)
-    layer_weights : Optional[List[float]] = None
+    # e.g.: layer_weights = [1.0, 0.5, 0.1] for 3-layer HRVQ (L0, L1, L2)
+    # HIGHER WEIGHTING FOR COARSE LAYER (L0) if desired; default set in __post_init__
+    layer_weights: list = None
     
     
     def __post_init__(self):
         """ INITIALISE DERIVED PARAMETERS """
         if self.layer_weights is None:
-            self.layer_weights = [1.0, 0.5, 0.1]
+            # DEFAULT FOR 3-LAYER HRVQ (L0, L1, L2)
+            self.layer_weights = [1.0, 0.5, 0.1]    
         
         # VALIDATE HEAD DIMENSIONS
         assert self.d_model % self.n_heads == 0, f"d_model {self.d_model} must be divisible by n_heads {self.n_heads}"
@@ -91,24 +92,34 @@ class WorldModelConfig:
     
 class TokenEmbedding(nn.Module):
     """ EMBED HIERARCHICAL (HRVQ) TOKENS + ACTIONS into TRANSFORMER SEQUENCE"""
-    
+    pass
 
 def hierarchical_causal_mask():
     """ CAUSAL MASK  """
-    
+    pass
+
 class TransformerBlock(nn.Module):
     """ STANDARD TRANSFORMER BLOCK  """
-    
+    pass
 
 class HierarchicalWorldModel(nn.Module):
     """ MAIN HIERARCHICAL WORLD MODEL FOR ATARI100K PREDICTION  """
-    
+    pass
 
 def hierarchical_loss():
     """ HIERARCHICAL LOSS FUNCTION  """
-    
-if __name__ == "__main__":
     pass
+
+if __name__ == "__main__":
+    # Test config loading
+    config = WorldModelConfig.from_yaml('configs/worldmodel.yaml')
+    print(config)
+    
+    # Validate derived properties
+    print(f"\nDerived properties:")
+    print(f"  Dims per head: {config.d_model // config.n_heads}")
+    print(f"  Timesteps: {config.max_seq_len // 4}")
+    print(f"  FFN expansion: {config.d_ff / config.d_model:.1f}x")
 
     
    
