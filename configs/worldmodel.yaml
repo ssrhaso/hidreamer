@@ -1,12 +1,13 @@
 # BASELINE IMPLEMENTATION OF WORLD MODEL
 
 model:
-  # ARCHITECTURE - STORM [Zhang et al. 2023] 
-  d_model: 384
-  n_layers: 6
-  n_heads: 6
-  d_ff: 1536  # 4x d_model
-  dropout: 0.1
+  # ARCHITECTURE - STORM INSPIRED [Zhang et al. 2023] 
+
+  d_model: 384 #384 = HRVQ embedding dimension
+  n_layers: 6 # 6 vs 8 layers
+  n_heads: 6  #d_model / n_heads = 64 dim per head
+  d_ff: 1536  # 4x d_model (standard)
+  dropout: 0.1 # standard (GPT-2, BERT)
   max_seq_len: 256  # 64 timesteps × 4 tokens
   
   # TOKEN SPACES
