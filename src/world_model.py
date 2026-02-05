@@ -237,13 +237,16 @@ def hierarchical_causal_mask(
                 mask[base_query + position, base_key + 2] = True   # BLOCK L1, L2, ACTION seeing L2 (past)
                 
                 
-    
-    
     # 4. CONVERT TO ATTENTION FORMAT (FROM BOOL)
     
     float_mask = torch.zeros(size = (seq_len, seq_len), device = device)
     float_mask = float_mask.masked_fill(mask = mask, value = float('-inf'))
     
+    """"
+    Standard: sees ALL past    Hierarchical: blocks fine details from past
+    L1₁: F F F F               L1₁: F X X F    (X = blocks L1₀, L2₀)
+
+    """
     return float_mask
     
     
