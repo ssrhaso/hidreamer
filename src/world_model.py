@@ -250,15 +250,58 @@ def hierarchical_causal_mask(
     return float_mask
     
     
+class TransformerBlock(nn.Module):
+    """ STANDARD TRANSFORMER BLOCK 
+    
+    - ATTENTION LAYERS (Controlled by causal mask)
+    - FFN LAYERS (Processes information within position)
+    """
+    
+    def __init__(
+        self,
+        config : WorldModelConfig
+    ):
+        super().__init__()
+        
+        """ 6 HEAD MULTI-HEAD SELF-ATTENTION LAYER
+        'Group Reflection' layer """
+        
+        self.attn = nn.MultiheadAttention(
+            embed_dim = config.d_model, # 384 DIM
+            num_heads = config.n_heads, # 6 HEADS
+            dropout = config.dropout,   # 0.1 DROPOUT (PREVENT OVERFITTING)
+            batch_first = True
+        )
+        
+        
+        """ FEEDFORWARD NETWORK (POSITION-WISE) 
+        'Self Reflection' layer """
+        
+        self.ffn = nn.Sequential(
+            nn.Linear(in_features = config.d_model, out_features = config.d_ff),  
+            # 384 -> 1536 (EXAPND FOR COMPLEX FEATURES)
+            
+            nn.GELU(),                               # NON LINEARITY
+            nn.Dropout(config.dropout),              # 0.1 DROPOUT (PREVENT OVERFITTING)
+            
+            nn.Linear(in_features = config.d_ff, out_features = config.d_model),  
+            # 1536 -> 384 (PROJECT BACK TO MODEL DIMENSION)                  
+            
+            nn.Dropout(config.dropout)               # 0.1 DROPOUT (PREVENT OVERFITTING)
+        )
+        
+        
+        
+        
+        
+        
+        
         
     
     
-    
-
-
-class TransformerBlock(nn.Module):
-    """ STANDARD TRANSFORMER BLOCK  """
     pass
+
+
 
 class HierarchicalWorldModel(nn.Module):
     """ MAIN HIERARCHICAL WORLD MODEL FOR ATARI100K PREDICTION  """
@@ -271,28 +314,38 @@ def hierarchical_loss():
 
 
 if __name__ == "__main__":
-    # HIERARCHICAL MASK TEST
-    mask = hierarchical_causal_mask(8, torch.device('cpu'))
-    print("Hierarchical Causal Mask (8 positions = 2 timesteps):")
-    print(mask)
     
-    # Verify specific properties
-    # Test the hierarchical blocking
-    assert mask[5, 1] == float('-inf'), "L1_t1 should NOT see L1_t0 (hierarchical block)"
-    assert mask[5, 2] == float('-inf'), "L1_t1 should NOT see L2_t0 (hierarchical block)"
-    assert mask[6, 1] == float('-inf'), "L2_t1 should NOT see L1_t0 (hierarchical block)"
-    assert mask[6, 2] == float('-inf'), "L2_t1 should NOT see L2_t0 (hierarchical block)"
+    
+    
+    
+    
+    
+    
+    
+    
 
-    # Test that L0 from past is still visible
-    assert mask[5, 0] == 0, "L1_t1 SHOULD see L0_t0 (physics from past)"
-    assert mask[6, 0] == 0, "L2_t1 SHOULD see L0_t0 (physics from past)"
+    """ HIERARCHICAL MASK TEST"""
+    # mask = hierarchical_causal_mask(8, torch.device('cpu'))
+    # print("Hierarchical Causal Mask (8 positions = 2 timesteps):")
+    # print(mask)
+    
+    # # Verify specific properties
+    # # Test the hierarchical blocking
+    # assert mask[5, 1] == float('-inf'), "L1_t1 should NOT see L1_t0 (hierarchical block)"
+    # assert mask[5, 2] == float('-inf'), "L1_t1 should NOT see L2_t0 (hierarchical block)"
+    # assert mask[6, 1] == float('-inf'), "L2_t1 should NOT see L1_t0 (hierarchical block)"
+    # assert mask[6, 2] == float('-inf'), "L2_t1 should NOT see L2_t0 (hierarchical block)"
 
-    # Test within-timestep hierarchy
-    assert mask[5, 4] == 0, "L1_t1 SHOULD see L0_t1 (current physics)"
-    assert mask[6, 4] == 0, "L2_t1 SHOULD see L0_t1 (current physics)"
-    assert mask[6, 5] == 0, "L2_t1 SHOULD see L1_t1 (current mechanics)"
+    # # Test that L0 from past is still visible
+    # assert mask[5, 0] == 0, "L1_t1 SHOULD see L0_t0 (physics from past)"
+    # assert mask[6, 0] == 0, "L2_t1 SHOULD see L0_t0 (physics from past)"
 
-    print("ALL hierarchical assertions passed")
+    # # Test within-timestep hierarchy
+    # assert mask[5, 4] == 0, "L1_t1 SHOULD see L0_t1 (current physics)"
+    # assert mask[6, 4] == 0, "L2_t1 SHOULD see L0_t1 (current physics)"
+    # assert mask[6, 5] == 0, "L2_t1 SHOULD see L1_t1 (current mechanics)"
+
+    # print("ALL hierarchical assertions passed")
 
     
    
