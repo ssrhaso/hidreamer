@@ -355,11 +355,24 @@ class HierarchicalWorldModel(nn.Module):
         self.headl1 = nn.Linear(in_features = config.d_model, out_features = config.num_codes)  # L1 (MECHANICS, MEDIUM)
         self.headl2 = nn.Linear(in_features = config.d_model, out_features = config.num_codes)  # L2 (OBJECTS, FINE)
 
-        # 5. MASK CACHING (HIERARCHICAL CAUSAL MASK)
+        # 5. MASK CACHING (HIERARCHICAL CAUSAL MASK) memory optimization
         self._cached_mask = None
         self._cached_mask_len = 0
         
-
+    def _get_mask(
+        self,
+        seq_len : int,
+        device : torch.device,
+    )-> torch.tensor:
+        """ GET OR CREATE CACHED HIERARCHICAL CAUSAL MASK TO SAVE COMPUTATION  """
+        if self._cached_mask is None or self._cached_mask_len != seq_len or self._cached_mask.device != device:
+            
+            self._cached_mask = hierarchical_causal_mask(seq_len = seq_len, device = device)
+            self._cached_mask_len = seq_len
+        
+        return self._cached_mask
+    
+    
 def hierarchical_loss():
     """ HIERARCHICAL LOSS FUNCTION  """
     pass
