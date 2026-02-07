@@ -373,6 +373,15 @@ class HierarchicalWorldModel(nn.Module):
         return self._cached_mask
     
     
+    def forward(
+        self,
+        tokens : torch.tensor,      # SHAPE: (B, T, 3) - HRVQ TOKENS , 3 LAYERS [L0, L1, L2]
+        actions : torch.tensor,     # SHAPE: (B, T) - ACTIONS
+    ) -> Tuple[torch.tensor, torch.tensor, torch.tensor]:  
+        """ FORWARD PASS THROUGH WORLD MODEL """
+        pass
+    
+    
 def hierarchical_loss():
     """ HIERARCHICAL LOSS FUNCTION  """
     pass
