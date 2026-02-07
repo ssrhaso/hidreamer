@@ -330,11 +330,35 @@ class TransformerBlock(nn.Module):
         return x
         
     
-
-
 class HierarchicalWorldModel(nn.Module):
     """ MAIN HIERARCHICAL WORLD MODEL FOR ATARI100K PREDICTION  """
-    pass
+    def __init__(
+        self,
+        config : WorldModelConfig,
+    ):
+        super().__init__()
+        self.config = config
+        
+        # 1. EMBEDDING LAYER (HRVQ TOKENS + ACTIONS -> TRANSFORMER SEQUENCE)
+        self.embedding = TokenEmbedding(config = config)
+        
+        # 2. TRANSFORMER BLOCKS (6 BLOCKS - HMASKING, ATTENTION, FFN)
+        self.blocks = nn.ModuleList([
+            TransformerBlock(config) for _ in range(config.n_layers)
+        ])
+        
+        # 3. NORM 
+        self.ln_final = nn.LayerNorm(normalized_shape = config.d_model)
+        
+        # 4. OUTPUT PREDICTION HEADS (384dim -> 256 codebook logits for each layer)
+        self.headl0 = nn.Linear(in_features = config.d_model, out_features = config.num_codes)  # L0 (PHYSICS, COARSE)
+        self.headl1 = nn.Linear(in_features = config.d_model, out_features = config.num_codes)  # L1 (MECHANICS, MEDIUM)
+        self.headl2 = nn.Linear(in_features = config.d_model, out_features = config.num_codes)  # L2 (OBJECTS, FINE)
+
+        # 5. MASK CACHING (HIERARCHICAL CAUSAL MASK)
+        self._cached_mask = None
+        self._cached_mask_len = 0
+        
 
 def hierarchical_loss():
     """ HIERARCHICAL LOSS FUNCTION  """
