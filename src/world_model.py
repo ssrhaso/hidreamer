@@ -13,6 +13,8 @@ from typing import Optional, Tuple, List
 import yaml
 from pathlib import Path
 
+import wandb
+
 @dataclass 
 class WorldModelConfig:
     """ CONFIG MATCHING configs/worldmodel.yaml """
