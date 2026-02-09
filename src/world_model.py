@@ -425,8 +425,6 @@ def hierarchical_loss():
 
 if __name__ == "__main__":
     
-    
-    
     """ HIERARCHICAL MASK TEST"""
     # mask = hierarchical_causal_mask(8, torch.device('cpu'))
     # print("Hierarchical Causal Mask (8 positions = 2 timesteps):")
@@ -452,51 +450,92 @@ if __name__ == "__main__":
 
 
     """ TRANSFORMER BLOCK TEST """    
+    # device = torch.device('cpu')
+    # config = WorldModelConfig()  # defaults
+    
+    # # Create fake input: batch=2, timesteps=4
+    # B, T = 2, 4
+    # tokens = torch.randint(0, config.num_codes, (B, T, 3))   # Random HRVQ tokens
+    # actions = torch.randint(0, config.num_actions, (B, T))    # Random actions
+    
+    # # Step 1: Embed (using existing TokenEmbedding)
+    # embed = TokenEmbedding(config)
+    # seq = embed(tokens, actions)  # (2, 16, 384)
+    # print(f"TokenEmbedding output: {seq.shape}")
+    
+    # # Step 2: Create mask
+    # mask = hierarchical_causal_mask(T * 4, device)  # (16, 16)
+    # print(f"Mask shape: {mask.shape}")
+    
+    # # Step 3: Pass through ONE TransformerBlock
+    # block = TransformerBlock(config)
+    # out = block(seq, mask)
+    
+    # # TEST A: Shape preserved (must be identical in/out)
+    # assert out.shape == seq.shape, f"FAIL: shape {out.shape} != {seq.shape}"
+    # print(f" Shape preserved: {seq.shape} → {out.shape}")
+    
+    # # TEST B: Output is different from input (block actually transformed something)
+    # assert not torch.allclose(out, seq, atol=1e-6), "FAIL: output identical to input"
+    # print(f" Output differs from input (block did work)")
+    
+    # # TEST C: No NaN or Inf in output (mask didn't break anything)
+    # assert not torch.isnan(out).any(), "FAIL: NaN in output"
+    # assert not torch.isinf(out).any(), "FAIL: Inf in output"
+    # print(f" No NaN/Inf in output")
+    
+    # # TEST D: Count parameters
+    # num_params = sum(p.numel() for p in block.parameters())
+    # print(f" Parameters per block: {num_params:,}")
+    # print(f"  ( X {config.n_layers} blocks = {num_params * config.n_layers:,} total for transformer)")
+    
+    # # TEST E: Gradients flow through (can we train this?)
+    # loss = out.sum()
+    # loss.backward()
+    # has_grads = all(p.grad is not None for p in block.parameters())
+    # assert has_grads, "FAIL: some parameters have no gradients"
+    # print(f" Gradients flow to all parameters")
+    # print("\nALL TRANSFORMER BLOCK TESTS PASSED")
+    
+    
+    """ HIERARCHICAL WORLD MODEL TEST """
+    config = WorldModelConfig() 
+    model = HierarchicalWorldModel(config)
     device = torch.device('cpu')
-    config = WorldModelConfig()  # defaults
-    
-    # Create fake input: batch=2, timesteps=4
+    config = WorldModelConfig()
     B, T = 2, 4
-    tokens = torch.randint(0, config.num_codes, (B, T, 3))   # Random HRVQ tokens
-    actions = torch.randint(0, config.num_actions, (B, T))    # Random actions
     
-    # Step 1: Embed (using existing TokenEmbedding)
-    embed = TokenEmbedding(config)
-    seq = embed(tokens, actions)  # (2, 16, 384)
-    print(f"TokenEmbedding output: {seq.shape}")
+    tokens = torch.randint(0, config.num_codes, (B, T, 3))
+    actions = torch.randint(0, config.num_actions, (B, T))
+    logits_l0, logits_l1, logits_l2 = model(tokens, actions)
     
-    # Step 2: Create mask
-    mask = hierarchical_causal_mask(T * 4, device)  # (16, 16)
-    print(f"Mask shape: {mask.shape}")
+    expected = (B, T, config.num_codes)  # (2, 4, 256)
     
-    # Step 3: Pass through ONE TransformerBlock
-    block = TransformerBlock(config)
-    out = block(seq, mask)
+    # TEST A: Output shapes
+    assert logits_l0.shape == expected, f"FAIL L0: {logits_l0.shape} != {expected}"
+    assert logits_l1.shape == expected, f"FAIL L1: {logits_l1.shape} != {expected}"
+    assert logits_l2.shape == expected, f"FAIL L2: {logits_l2.shape} != {expected}"
+    print(f" Output shapes: L0={logits_l0.shape}, L1={logits_l1.shape}, L2={logits_l2.shape}")
     
-    # TEST A: Shape preserved (must be identical in/out)
-    assert out.shape == seq.shape, f"FAIL: shape {out.shape} != {seq.shape}"
-    print(f" Shape preserved: {seq.shape} → {out.shape}")
+    # TEST B: No NaN/Inf
+    assert not torch.isnan(logits_l0).any(), "FAIL: NaN in L0 logits"
+    assert not torch.isinf(logits_l0).any(), "FAIL: Inf in L0 logits"
+    print(f" No NaN/Inf in outputs")
     
-    # TEST B: Output is different from input (block actually transformed something)
-    assert not torch.allclose(out, seq, atol=1e-6), "FAIL: output identical to input"
-    print(f" Output differs from input (block did work)")
+    # TEST C: Gradients flow end-to-end
+    model.zero_grad()
+    logits_l0, logits_l1, logits_l2 = model(tokens, actions)
+    dummy_loss = logits_l0.sum() + logits_l1.sum() + logits_l2.sum()
+    dummy_loss.backward()
     
-    # TEST C: No NaN or Inf in output (mask didn't break anything)
-    assert not torch.isnan(out).any(), "FAIL: NaN in output"
-    assert not torch.isinf(out).any(), "FAIL: Inf in output"
-    print(f" No NaN/Inf in output")
+    assert model.embedding.token_embeds[0].weight.grad is not None, "FAIL: no grad to embedding"
+    assert list(model.blocks[0].parameters())[0].grad is not None, "FAIL: no grad to blocks"
+    assert model.headl0.weight.grad is not None, "FAIL: no grad to output heads"
+    print(f" Gradients flow: embedding -> blocks -> heads")
     
-    # TEST D: Count parameters
-    num_params = sum(p.numel() for p in block.parameters())
-    print(f" Parameters per block: {num_params:,}")
-    print(f"  ( X {config.n_layers} blocks = {num_params * config.n_layers:,} total for transformer)")
-    
-    # TEST E: Gradients flow through (can we train this?)
-    loss = out.sum()
-    loss.backward()
-    has_grads = all(p.grad is not None for p in block.parameters())
-    assert has_grads, "FAIL: some parameters have no gradients"
-    print(f" Gradients flow to all parameters")
-    print("\nALL TRANSFORMER BLOCK TESTS PASSED")
+    # TEST D: Parameter count
+    total = sum(p.numel() for p in model.parameters())
+    print(f" Total parameters: {total:,} ({total/1e6:.2f}M)")
+    print("\nALL HIERARCHICAL WORLD MODEL TESTS PASSED")
     
    
