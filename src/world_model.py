@@ -460,6 +460,16 @@ def hierarchical_loss(
         layer_weights[1] * crossentropy_l1 +
         layer_weights[2] * crossentropy_l2
     )
+    
+    """ 4. METRICS LOGGING (FOR WAND.B) """
+    with torch.no_grad():
+        pass
+    
+    metrics = {
+        
+    }
+    
+    return total_loss, metrics
 
 
 
