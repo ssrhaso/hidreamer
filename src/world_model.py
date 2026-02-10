@@ -463,10 +463,18 @@ def hierarchical_loss(
     
     """ 4. METRICS LOGGING (FOR WAND.B) """
     with torch.no_grad():
-        pass
-    
-    metrics = {
+        accuracy_10 = (logits_l0.argmax(dim = -1) == groundtruth_l0).float().mean().item()  # TOP-1 ACCURACY FOR LAYER 0
+        accuracy_11 = (logits_l1.argmax(dim = -1) == groundtruth_l1).float().mean().item()  # TOP-1 ACCURACY FOR LAYER 1
+        accuracy_12 = (logits_l2.argmax(dim = -1) == groundtruth_l2).float().mean().item()  # TOP-1 ACCURACY FOR LAYER 2
         
+    metrics = {
+        'loss_total': total_loss.item(),
+        'loss_l0': crossentropy_l0.item(),
+        'loss_l1': crossentropy_l1.item(),
+        'loss_l2': crossentropy_l2.item(),
+        'accuracy_l0': accuracy_10,
+        'accuracy_l1': accuracy_11,
+        'accuracy_l2': accuracy_12,
     }
     
     return total_loss, metrics
