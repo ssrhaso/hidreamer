@@ -30,6 +30,11 @@ training:
   grad_clip: 1.0
   num_epochs: 50
 
+  warmup_steps: 1000      # Linear warmup before cosine decay
+  betas : [0.9, 0.95 ]    # AdamW momentum parameters (GPT/STORM)
+  mixed_precision : true  # float16 AMP on T4 (adjustable)
+  accumulation_steps : 2  # Effective batch, 32x2 = 64, to fit T4 GPU memory constraints (adjustable)
+
 
 # DATA
 data:
