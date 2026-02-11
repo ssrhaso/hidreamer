@@ -24,7 +24,21 @@ class WorldModelDataset(Dataset):
         self.all_tokens = []        # (N, 3) arrays, 1x per game
         self.all_actions = []       # (N,) arrays, 1x per game
         self.valid_starts = []      # (game_idx, start_idx) tuples 
-    
+
+        for game_idx, game in enumerate(games):
+            print(f"LOADING GAME {game}...")
+            
+            """ 1. LOAD HRVQ TOKENS (3 LAYERS) """
+            
+            """ 2. LOAD ACTIONS (FROM REPLAY BUFFER) """
+            
+            """ 3. STORE GAME DATA """
+            
+            """ 4. COMPUTE VALID START INDICES (RESPECTING EPISODE BOUNDARIES) """
+            
+            pass
+            
+            
     def __len__(self):
         return len(self.valid_starts)
     
