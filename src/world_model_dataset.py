@@ -37,6 +37,12 @@ class WorldModelDataset(Dataset):
             tokens_3layer = np.stack(layers, axis = 1).astype(np.int64) # (100000, 3)
             
             """ 2. LOAD ACTIONS (FROM REPLAY BUFFER) """
+            buf = np.load(f"{replay_dir}/replay_buffer_ALE_{game}.npz") 
+            actions = buf['actions'].astype(np.int64) # (100000,)
+            dones = buf['dones']
+            
+            N = len(actions)
+            assert len(tokens_3layer) == N, f"Token and action lengths do not match for game {game}!"
             
             """ 3. STORE GAME DATA """
             
