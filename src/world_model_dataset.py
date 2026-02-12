@@ -46,6 +46,9 @@ class WorldModelDataset(Dataset):
             
             """ 3. STORE GAME DATA """
             
+            self.all_tokens.append(tokens_3layer) 
+            self.all_actions.append(actions)
+            
             """ 4. COMPUTE VALID START INDICES (RESPECTING EPISODE BOUNDARIES) """
             
             pass
