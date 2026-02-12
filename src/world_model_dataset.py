@@ -29,6 +29,12 @@ class WorldModelDataset(Dataset):
             print(f"LOADING GAME {game}...")
             
             """ 1. LOAD HRVQ TOKENS (3 LAYERS) """
+            layers = []
+            for layer in range(3):
+                path = f"{tokens_dir}/vq_tokens_ALE_{game}_layer{layer}.npy"
+                t = np.load(path).squeeze() # (100000, 1, 1) -> (100000,)
+                layers.append(t)
+            tokens_3layer = np.stack(layers, axis = 1).astype(np.int64) # (100000, 3)
             
             """ 2. LOAD ACTIONS (FROM REPLAY BUFFER) """
             
