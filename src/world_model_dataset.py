@@ -63,7 +63,13 @@ class WorldModelDataset(Dataset):
         return len(self.valid_starts)
     
     def __getitem__(self, idx):
-        pass
+        game_idx, start = self.valid_starts[idx]
+        end = start + self.seq_len
+        
+        tokens = torch.from_numpy(self.all_tokens[game_idx][start:end]) # (64, 3)
+        actions = torch.from_numpy(self.all_actions[game_idx][start:end]) # (64,)
+        
+        return tokens, actions
     
 
 def create_dataloders():
