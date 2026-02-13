@@ -72,8 +72,26 @@ class WorldModelDataset(Dataset):
         return tokens, actions
     
 
-def create_dataloders():
-    pass
+def create_dataloders(
+    config_path : str = "configs/worldmodel.yaml",
+    seed : int = 42,
+):
+    with open(config_path, 'r') as f:
+        config = yaml.safe_load(f)
+    
+    dataset = WorldModelDataset(
+    )
+    
+    train_loader = DataLoader(
+    )
+    
+    val_loader = DataLoader(
+    )
+    
+    info = {
+    }
+    
+    return train_loader, val_loader, info
 
 if __name__ == "__main__":
     pass
