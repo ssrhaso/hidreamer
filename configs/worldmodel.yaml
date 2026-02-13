@@ -38,7 +38,7 @@ training:
 
 # DATA
 data:
-  games: ['ALE_Pong-v5', 'ALE_Breakout-v5', 'ALE_MsPacman-v5']
+  games: ['Pong-v5', 'Breakout-v5', 'MsPacman-v5']
   tokens_dir: 'checkpoints/rsvq_tokens'
   replay_dir: 'data'
   val_split: 0.05

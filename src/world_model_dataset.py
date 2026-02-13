@@ -59,7 +59,6 @@ class WorldModelDataset(Dataset):
             print(f" {N} TIMESTEPS, {len(valid_idx)} VALID STARTS")
             
             
-            
     def __len__(self):
         return len(self.valid_starts)
     
