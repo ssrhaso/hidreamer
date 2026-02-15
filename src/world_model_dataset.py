@@ -104,6 +104,9 @@ def create_dataloders(
     )
     
     info = {
+        'total' : len(dataset), 'train' : train_size, 'val' : val_size,
+        'seq_len' : config['training']['seq_len'],
+        'batch_size' : config['training']['batch_size'],
     }
     
     return train_loader, val_loader, info
