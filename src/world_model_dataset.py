@@ -72,7 +72,7 @@ class WorldModelDataset(Dataset):
         return tokens, actions
     
 
-def create_dataloders(
+def create_dataloaders(
     config_path : str = "configs/worldmodel.yaml",
     seed : int = 42,
 ):
