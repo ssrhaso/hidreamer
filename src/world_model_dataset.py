@@ -86,6 +86,13 @@ def create_dataloders(
         seq_len = config['training']['seq_len'],
     )
     
+    val_size = int(len(dataset) * config['data']['val_split'])
+    train_size = len(dataset) - val_size
+    train_dataset, val_dataset = random_split(
+        dataset, [train_size, val_size],
+        generator = torch.Generator().manual_seed(seed)
+    )
+    
     train_loader = DataLoader(
     )
     
