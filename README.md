@@ -40,22 +40,42 @@ Atari Frames (4×84×84) → CNN Encoder (1.88M params) → 384D Embeddings
 
 Implemented and trained a 3-layer Hierarchical Residual VQ inspired by SoundStream (2021) and HiTVideo (2025). Each layer quantizes the residual of the previous, with layer-specific commitment costs `[0.05, 0.25, 0.60]` forcing Layer 0 to capture coarse shared representations first. 100% codebook utilization across all layers (perplexities: 240/229/228). Cross-game analysis of Layer 0 tokens shows shared codes for backgrounds and motion primitives, with game-specific mechanics (paddle physics, ghost AI, brick patterns) separated into higher layers — consistent with the hierarchical hypothesis that Atari games share structure at the right abstraction level.
 
-### World Model (In Progress)
+### World Model (Ready for Training)
 
-**Hierarchical Transformer — Partially Implemented**
+**Hierarchical Transformer — Implementation Complete**
 
-Building a discrete token world model that operates on HRVQ token sequences, drawing on ideas from TWISTER (ICLR 2025) and DreamerV3. Target architecture: 6-layer transformer (384D, 6 heads, 1536 FFN) predicting next-step tokens autoregressively across the 3-level hierarchy + actions.
+Built a discrete token world model operating on HRVQ token sequences (6-layer transformer, 384D, 6 heads, 1536 FFN, ~11M params). Predicts next-step tokens autoregressively across the 3-level hierarchy. Architecture inspired by STORM (Zhang et al., 2023) with hierarchical masking novelty.
 
-**Completed so far:**
+**Architecture Components:**
 
-- **Token embedding layer:** Interleaves 3 HRVQ layers + action tokens into `(B, T*4, 384)` sequences with learned level embeddings and positional encodings
-- **Hierarchical causal attention mask:** Custom mask enforcing both temporal causality and semantic hierarchy. Beyond standard causal masking, it blocks fine-grained layers (L1, L2) from attending to previous timesteps' detail tokens while allowing all layers to see past coarse physics tokens (L0). Within each timestep, the mask enforces hierarchical dependencies (L2→L1→L0→Action) so predictions build coarse-to-fine. This matches the HRVQ tokenizer's learned abstraction levels to the transformer's information flow
-- **Transformer block:** Standard pre-norm transformer block (MHSA + FFN + residuals + LayerNorm)
-- **Config + data pipeline:** Full YAML config with training hyperparameters, token data pre-extracted for all 3 games × 3 layers
+- **Token embedding:** Interleaves 3 HRVQ layers + action tokens into `(B, T*4, 384)` sequences with learned level embeddings and positional encodings
+- **Hierarchical causal mask:** Custom attention mask enforcing both temporal causality and semantic hierarchy. Beyond standard causal masking, blocks fine-grained layers (L1, L2) from attending to previous timesteps' detail tokens while allowing all layers to see past coarse physics tokens (L0). Within each timestep, enforces hierarchical dependencies (L2→L1→L0→Action) so predictions build coarse-to-fine
+- **6 transformer blocks:** Standard pre-norm blocks (MHSA + FFN + residuals + LayerNorm) with cached mask for efficiency
+- **Prediction heads:** Layer-specific linear heads predict next HRVQ codes (L0: action→L0_next, L1: L0→L1_same, L2: L1→L2_same)
+- **Hierarchical loss:** Weighted cross-entropy `[1.0, 0.5, 0.1]` emphasizing coarse dynamics, with per-layer accuracy tracking
 
-Recent additions include the full `HierarchicalWorldModel` scaffold with stacked blocks, layer-specific token prediction heads (L0/L1/L2), and a cached hierarchical mask to avoid recomputation on long sequences. A weighted hierarchical loss is also wired to emphasize coarse dynamics over fine detail, aligning the training signal with the HRVQ abstraction ladder.
+**Dataset Pipeline (`world_model_dataset.py`):**
 
-**Remaining:** Assembling blocks into full model with prediction heads (token/reward/done), loss function, and training loop.
+- Loads 300K timesteps (3 games × 100K) of pre-extracted HRVQ tokens and actions
+- Respects episode boundaries using vectorized cumsum-based window validation (0 violations across 246K valid 64-step sequences)
+- Multi-game batching: Pong 38%, Breakout 27%, MsPacman 35% — forces Layer 0 to learn shared physics
+- Train/val split: 234K/12K sequences, DataLoader with persistent workers for Windows compatibility
+
+**Training Config (`configs/worldmodel.yaml`):**
+
+- Optimizer: AdamW (lr=3e-4, weight_decay=0.1, betas=[0.9, 0.95])
+- Scheduler: 1000-step linear warmup → cosine annealing
+- Batch: 32 sequences/step × 2 accumulation steps = effective batch 64
+- Mixed precision: float16 AMP with GradScaler (T4-compatible)
+- 50 epochs, gradient clipping at 1.0
+
+**Validation Suite:**
+
+- `validate_dataset.py`: End-to-end test (shapes, dtypes, boundary integrity, forward pass + loss)
+- `validate_world_model.py`: Model architecture test (output shapes, gradients, NaN checks)
+- `validate_mask.py`: Hierarchical attention pattern verification
+
+**Status:** Model + dataset integration verified. Training loop implementation in progress (`world_model_train.py`).
 
 ## Lessons Learned
 
