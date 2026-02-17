@@ -20,9 +20,25 @@ import wandb
 from world_model import HierarchicalWorldModel, WorldModelConfig, hierarchical_loss
 from world_model_dataset import create_dataloaders
 
+""" LEARNING RATE SCHEDULE (LINEAR WARMUP)"""
 def get_lr(
-):
-    pass
+    step : int,
+    warmup_steps : int,
+    total_steps : int,
+    max_lr : float,
+    min_lr : float = 1e-6,
+) -> float:
+
+    # 1. LINEAR INTERPOLATION WARMUP
+    if step < warmup_steps:
+        return min_lr + (max_lr - min_lr) * (step / warmup_steps)
+    
+    # 2. COSINE DECAY 
+    decay_steps = total_steps - warmup_steps
+    progress = (step - warmup_steps) / max(decay_steps, 1) # progress %
+    
+    cosine_decay = 0.5 * (1 + math.cos(math.pi * progress))
+    return min_lr + (max_lr - min_lr) * cosine_decay
 
 @torch.no_grad()
 def compute_metrics_summary(
