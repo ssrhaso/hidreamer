@@ -42,7 +42,9 @@ def get_lr(
 
 @torch.no_grad()
 def compute_metrics_summary(
-):
+    metrics_list : list[dict]
+) -> dict:
+    
     pass
 
 def train_one_epoch(
