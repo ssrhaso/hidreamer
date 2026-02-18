@@ -20,7 +20,7 @@ import wandb
 from world_model import HierarchicalWorldModel, WorldModelConfig, hierarchical_loss
 from world_model_dataset import create_dataloaders
 
-""" LEARNING RATE SCHEDULE (LINEAR WARMUP)"""
+
 def get_lr(
     step : int,
     warmup_steps : int,
@@ -28,6 +28,7 @@ def get_lr(
     max_lr : float,
     min_lr : float = 1e-6,
 ) -> float:
+    """ LEARNING RATE SCHEDULE (LINEAR WARMUP)"""
 
     # 1. LINEAR INTERPOLATION WARMUP
     if step < warmup_steps:
@@ -44,8 +45,14 @@ def get_lr(
 def compute_metrics_summary(
     metrics_list : list[dict]
 ) -> dict:
+    """ UTILITY FUNCTION TO AVERAGE METRICS OVER MULTIPLE BATCHES IN ONE EPOCH"""
     
-    pass
+    summary = {}
+    
+    for key in metrics_list[0]:
+        summary[key] = sum(m[key] for m in metrics_list) / len(metrics_list)
+    
+    return summary
 
 def train_one_epoch(
 ):
