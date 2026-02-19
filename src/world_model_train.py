@@ -81,7 +81,8 @@ def train_one_epoch(
     
     running_loss = 0.0
     all_metrics  = []
-
+    pbar = tqdm(train_loader, desc = f"Epoch {epoch+1} [TRAIN]", leave = True)
+    optimizer.zero_grad()
     pass
 
 
