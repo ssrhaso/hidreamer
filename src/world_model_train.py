@@ -67,8 +67,23 @@ def train_one_epoch(
     use_wandb : bool = True,
 ) -> tuple:
     
+    # 1. SET MODEL TO TRAIN MODE (ENABLES DROPOUT, BATCHNORM UPDATES, ETC.)
+    model.train()
     
+    # 2. CONFIG EXTRACTION
+    
+    accum_steps   = config['training']['accumulation_steps']
+    grad_clip     = config['training']['grad_clip']
+    max_lr        = config['training']['learning_rate']
+    warmup_steps  = config['training']['warmup_steps']
+    layer_weights = config['model']['layer_weights']
+    use_amp       = config['training']['mixed_precision'] and device.type == 'cuda'
+    
+    running_loss = 0.0
+    all_metrics  = []
+
     pass
+
 
 @torch.no_grad()
 def validate_one_epoch(
