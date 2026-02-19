@@ -55,7 +55,19 @@ def compute_metrics_summary(
     return summary
 
 def train_one_epoch(
-):
+    model : HierarchicalWorldModel,
+    train_loader, 
+    optimizer : torch.optim.Optimizer,
+    scaler : GradScaler,
+    config : dict,
+    global_step : int,
+    total_steps : int,
+    device : torch.device,
+    epoch : int,
+    use_wandb : bool = True,
+) -> tuple:
+    
+    
     pass
 
 @torch.no_grad()
