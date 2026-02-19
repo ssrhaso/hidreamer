@@ -79,10 +79,22 @@ def train_one_epoch(
     layer_weights = config['model']['layer_weights']
     use_amp       = config['training']['mixed_precision'] and device.type == 'cuda'
     
+    # 3. PRE LOOP INITIALISATION
     running_loss = 0.0
     all_metrics  = []
     pbar = tqdm(train_loader, desc = f"Epoch {epoch+1} [TRAIN]", leave = True)
-    optimizer.zero_grad()
+    optimizer.zero_grad() # RESET GRADIENTS BEFORE STARTING EPOCH
+    
+    # 4. MAIN TRAINING LOOP 
+    
+    for batch_idx, (tokens, actions) in enumerate(pbar):
+        with autocast("cuda", enabled = use_amp):
+            pass
+        
+        if (batch_idx + 1) % accum_steps == 0:
+            
+            if use_wandb:
+                pass
     pass
 
 
