@@ -245,15 +245,18 @@ def save_checkpoint(
     checkpoint = {
         
         'model_state_dict' : model.state_dict(),
+        # ORDERED DICT of all model parameter tensors and their values (weights, biases, etc.)
         
         'optimizer_state_dict' : optimizer.state_dict(),
+        # ADAMW Internal states (adaptive lr rate)
         
         'scaler_state_dict' : scaler.state_dict(),
+        # GRADSCALER Internal states (current scale factor, growth interval, etc.)
         
         'epoch' : epoch,
         'global_step' : global_step,
         'best_val_loss' : best_val_loss,
-        
+        # epoch, lr scheduler step counter, best validation loss for early stopping or model selection
     }
     
     torch.save(checkpoint, save_path)
