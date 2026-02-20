@@ -234,7 +234,21 @@ def validate_one_epoch(
     return avg_loss, all_metrics
 
 def save_checkpoint(
+    model : HierarchicalWorldModel,
+    optimizer : torch.optim.Optimizer,
+    scaler : GradScaler,
+    epoch : int,
+    global_step : int,
+    best_val_loss : float,
+    save_path : str,
 ):
+    checkpoint = {
+        
+    }
+    
+    torch.save(checkpoint, save_path)
+    
+    print(f"    CHECKPOINT SAVED to : {save_path}")
     pass
 
 def load_checkpoint(
