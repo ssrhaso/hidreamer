@@ -13,7 +13,8 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.cuda.amp import GradScaler, autocast
+from torch import autocast
+from torch import GradScaler
 from tqdm import tqdm
 
 import wandb
@@ -171,8 +172,66 @@ def train_one_epoch(
 
 @torch.no_grad()
 def validate_one_epoch(
-):
-    pass
+    model : HierarchicalWorldModel,
+    val_loader, 
+    config : dict,
+    device : torch.device,
+    epoch : int,
+) -> tuple:
+    
+    """ 1. SET MODEL TO EVAL MODE (DISABLES DROPOUT, BATCHNORM FIXED, ETC.)"""
+    model.eval()
+    
+    
+    """ 2. CONFIG EXTRACTION"""
+    
+    layer_weights = config['model']['layer_weights']
+    use_amp       = config['training']['mixed_precision'] and device.type == 'cuda'
+    
+    
+    """ 3. PRE LOOP INITIALISATION"""
+    running_loss = 0.0
+    all_metrics  = []
+    pbar = tqdm(val_loader, desc = f"Epoch {epoch+1} [VAL]", leave = True)    
+    
+    """ 4. MAIN VALIDATION LOOP""" 
+    
+    for tokens, actions in pbar:
+        
+        tokens = tokens.to(device)
+        actions = actions.to(device)
+        
+        """ FORWARD PASS """
+        with autocast("cuda", enabled = use_amp):
+            
+            # MODEL OUTPUTS
+            logits_l0, logits_l1, logits_l2 = model(tokens, actions) 
+            
+            # CROSS ENTROPY HIERARCHICAL LOSS
+            loss, metrics = hierarchical_loss(
+                logits_l0 = logits_l0, logits_l1 = logits_l1, logits_l2 = logits_l2,
+                tokens = tokens,
+                layer_weights = layer_weights,
+            )
+        
+        # NO BACKWARD PASS OR OPTIMIZER STEP DURING VALIDATION, JUST METRICS COMPUTATION
+        
+        """ LOGGING AND PBAR UPDATE """
+        running_loss += metrics['loss_total'] 
+        all_metrics.append(metrics)
+        
+        pbar.set_postfix({
+            'val_loss' : f"{metrics['loss_total']:.4f}",
+            'acc_l0' : f"{metrics['accuracy_l0']:.3f}",
+            'acc_l1' : f"{metrics['accuracy_l1']:.3f}",
+            'acc_l2' : f"{metrics['accuracy_l2']:.3f}",
+        })
+        
+        
+    """ 5. EPOCH SUMMARY """
+    
+    avg_loss = running_loss / len(val_loader)
+    return avg_loss, all_metrics
 
 def save_checkpoint(
 ):
