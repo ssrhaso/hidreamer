@@ -157,9 +157,9 @@ def train_one_epoch(
         
         pbar.set_postfix({
             'loss' : f"{metrics['loss_total']:.4f}",
-            'acc_l0' : f"{metrics['acc_l0']:.3f}",
-            'acc_l1' : f"{metrics['acc_l1']:.3f}",
-            'acc_l2' : f"{metrics['acc_l2']:.3f}",
+            'acc_l0' : f"{metrics['accuracy_l0']:.3f}",
+            'acc_l1' : f"{metrics['accuracy_l1']:.3f}",
+            'acc_l2' : f"{metrics['accuracy_l2']:.3f}",
             'lr' : f"{optimizer.param_groups[0]['lr']:.2e}",
         })
         
