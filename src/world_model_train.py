@@ -146,13 +146,23 @@ def train_one_epoch(
                     'train/global_step' :   global_step,
     
                 }, step = global_step)
-            
-            pass
         
-        if (batch_idx + 1) % accum_steps == 0:
-            
-            if use_wandb:
-                pass
+        
+        
+        """ LOGGING AND PBAR UPDATE """
+        
+        running_loss += metrics['loss_total'] 
+        all_metrics.append(metrics)
+        
+        pbar.set_postfix({
+            'loss' : f"{metrics['loss_total']:.4f}",
+            'acc_l0' : f"{metrics['acc_l0']:.3f}",
+            'acc_l1' : f"{metrics['acc_l1']:.3f}",
+            'acc_l2' : f"{metrics['acc_l2']:.3f}",
+            'lr' : f"{optimizer.param_groups[0]['lr']:.2e}",
+        })
+        
+        
     pass
 
 
