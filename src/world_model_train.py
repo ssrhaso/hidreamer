@@ -70,6 +70,7 @@ def train_one_epoch(
     """ 1. SET MODEL TO TRAIN MODE (ENABLES DROPOUT, BATCHNORM UPDATES, ETC.)"""
     model.train()
     
+    
     """ 2. CONFIG EXTRACTION"""
     
     accum_steps   = config['training']['accumulation_steps']
@@ -79,11 +80,13 @@ def train_one_epoch(
     layer_weights = config['model']['layer_weights']
     use_amp       = config['training']['mixed_precision'] and device.type == 'cuda'
     
+    
     """ 3. PRE LOOP INITIALISATION"""
     running_loss = 0.0
     all_metrics  = []
     pbar = tqdm(train_loader, desc = f"Epoch {epoch+1} [TRAIN]", leave = True)
     optimizer.zero_grad() # RESET GRADIENTS 1 TIME BEFORE STARTING EPOCH
+    
     
     """ 4. MAIN TRAINING LOOP""" 
     
@@ -147,8 +150,6 @@ def train_one_epoch(
     
                 }, step = global_step)
         
-        
-        
         """ LOGGING AND PBAR UPDATE """
         
         running_loss += metrics['loss_total'] 
@@ -163,7 +164,9 @@ def train_one_epoch(
         })
         
         
-    pass
+    """ 5. EPOCH SUMMARY """
+    avg_loss = running_loss / len(train_loader)
+    return avg_loss, global_step, all_metrics
 
 
 @torch.no_grad()
