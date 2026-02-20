@@ -136,8 +136,17 @@ def train_one_epoch(
             
             for parameter_group in optimizer.param_groups:
                 parameter_group['lr'] = lr # UPDATE LEARNING RATE MANUALLY FOR EACH PARAMETER GROUP
-                
-                
+            
+            # WANDB LOGGING
+            if use_wandb:
+                wandb.log({
+                    
+                    'train/loss_step' :     metrics['loss_total'],
+                    'train/lr' :            lr,    
+                    'train/global_step' :   global_step,
+    
+                }, step = global_step)
+            
             pass
         
         if (batch_idx + 1) % accum_steps == 0:
