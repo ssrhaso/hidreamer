@@ -67,10 +67,10 @@ def train_one_epoch(
     use_wandb : bool = True,
 ) -> tuple:
     
-    # 1. SET MODEL TO TRAIN MODE (ENABLES DROPOUT, BATCHNORM UPDATES, ETC.)
+    """ 1. SET MODEL TO TRAIN MODE (ENABLES DROPOUT, BATCHNORM UPDATES, ETC.)"""
     model.train()
     
-    # 2. CONFIG EXTRACTION
+    """ 2. CONFIG EXTRACTION"""
     
     accum_steps   = config['training']['accumulation_steps']
     grad_clip     = config['training']['grad_clip']
@@ -79,16 +79,65 @@ def train_one_epoch(
     layer_weights = config['model']['layer_weights']
     use_amp       = config['training']['mixed_precision'] and device.type == 'cuda'
     
-    # 3. PRE LOOP INITIALISATION
+    """ 3. PRE LOOP INITIALISATION"""
     running_loss = 0.0
     all_metrics  = []
     pbar = tqdm(train_loader, desc = f"Epoch {epoch+1} [TRAIN]", leave = True)
-    optimizer.zero_grad() # RESET GRADIENTS BEFORE STARTING EPOCH
+    optimizer.zero_grad() # RESET GRADIENTS 1 TIME BEFORE STARTING EPOCH
     
-    # 4. MAIN TRAINING LOOP 
+    """ 4. MAIN TRAINING LOOP""" 
     
     for batch_idx, (tokens, actions) in enumerate(pbar):
+        # tokens = (B, T, 3) - HRVQ TOKENS
+        # actions = (B, T) - DISCRETE ACTIONS
+        
+        tokens = tokens.to(device)
+        actions = actions.to(device)
+        
+        """ FORWARD PASS """
         with autocast("cuda", enabled = use_amp):
+            
+            # MODEL OUTPUTS
+            logits_l0, logits_l1, logits_l2 = model(tokens, actions) 
+            
+            # CROSS ENTROPY HIERARCHICAL LOSS
+            loss, metrics = hierarchical_loss(
+                logits_l0 = logits_l0, logits_l1 = logits_l1, logits_l2 = logits_l2,
+                tokens = tokens,
+                layer_weights = layer_weights,
+            )
+            
+            # scale down so gradients from multiple mini-batches sum to correct magnitude
+            loss = loss / accum_steps
+            
+        """ BACKWARD PASS """
+        
+        scaler.scale(loss).backward()
+        # multiply loss by scale factor (prevent fp16 underflow) and compute gradients
+        
+        # GRADIENT ACCUMULATION STEP 
+        if (batch_idx + 1) % accum_steps == 0:
+            scaler.unscale_(optimizer) # unscale gradients before clipping
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm = grad_clip) # gradient clipping
+            
+            # self maintenance optimizer with gradscaler
+            scaler.step(optimizer) # update parameters
+            scaler.update() # update scale factor for next iteration
+            optimizer.zero_grad() # reset gradients for next accumulation
+            global_step += 1
+    
+            # UPDATE LEARNING RATE FOR THIS STEP
+            lr = get_lr(
+                step = global_step,
+                warmup_steps = warmup_steps,
+                total_steps = total_steps,
+                max_lr = max_lr,
+            )
+            
+            for parameter_group in optimizer.param_groups:
+                parameter_group['lr'] = lr # UPDATE LEARNING RATE MANUALLY FOR EACH PARAMETER GROUP
+                
+                
             pass
         
         if (batch_idx + 1) % accum_steps == 0:
