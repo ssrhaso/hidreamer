@@ -244,12 +244,21 @@ def save_checkpoint(
 ):
     checkpoint = {
         
+        'model_state_dict' : model.state_dict(),
+        
+        'optimizer_state_dict' : optimizer.state_dict(),
+        
+        'scaler_state_dict' : scaler.state_dict(),
+        
+        'epoch' : epoch,
+        'global_step' : global_step,
+        'best_val_loss' : best_val_loss,
+        
     }
     
     torch.save(checkpoint, save_path)
-    
     print(f"    CHECKPOINT SAVED to : {save_path}")
-    pass
+
 
 def load_checkpoint(
 ):
