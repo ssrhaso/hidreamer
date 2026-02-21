@@ -271,6 +271,8 @@ def load_checkpoint(
     device : torch.device,
 ) -> tuple:
     
+    checkpoint = torch.load(path, map_location = device, weights_only = False)
+    
     pass
 
 def train(
