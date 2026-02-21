@@ -264,7 +264,13 @@ def save_checkpoint(
 
 
 def load_checkpoint(
-):
+    path : str,
+    model : HierarchicalWorldModel,
+    optimizer : torch.optim.Optimizer,
+    scaler : GradScaler,
+    device : torch.device,
+) -> tuple:
+    
     pass
 
 def train(
