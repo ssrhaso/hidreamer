@@ -294,14 +294,16 @@ def train(
         config = yaml.safe_load(f)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     
-    """ BUILD DATALOADERS """
+    """ PRE LOOP INITIALISATIONS """
+    
+    # BUILD DATALOADERS
     train_loader, val_loader, data_info = create_dataloaders(config_path = config_path, seed = config['training']['seed'])
 
-    """ BUILD MODEL """
+    # BUILD MODEL 
     model_config = WorldModelConfig.from_yaml(config_path = config_path)
     model = HierarchicalWorldModel(config = model_config).to(device)
 
-    """ OPTIMIZER """
+    # OPTIMIZER 
     optimizer = torch.optim.AdamW(
         params = model.parameters(),
         lr = config['training']['learning_rate'],
@@ -309,5 +311,11 @@ def train(
         weight_decay = config['training']['weight_decay'],
     )
 
+    # AMP SCALER 
+    use_amp = config['training']['mixed_precision'] and device.type == 'cuda'
+    scaler = GradScaler(enabled = use_amp)
+    
+    # TOTAL STEPS FOR LR SCHEDULING 
+    
 if __name__ == "__main__":
     pass
