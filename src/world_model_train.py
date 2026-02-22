@@ -99,7 +99,7 @@ def train_one_epoch(
         actions = actions.to(device)
         
         """ FORWARD PASS """
-        with autocast("cuda", enabled = use_amp):
+        with autocast(device_type = device.type, enabled = use_amp):
             
             # MODEL OUTPUTS
             logits_l0, logits_l1, logits_l2 = model(tokens, actions) 
@@ -296,14 +296,14 @@ def train(
     
     """ PRE LOOP INITIALISATIONS """
     
-    # BUILD DATALOADERS
+    # 1. BUILD DATALOADERS
     train_loader, val_loader, data_info = create_dataloaders(config_path = config_path, seed = config['training']['seed'])
 
-    # BUILD MODEL 
+    # 2. BUILD MODEL 
     model_config = WorldModelConfig.from_yaml(config_path = config_path)
     model = HierarchicalWorldModel(config = model_config).to(device)
 
-    # OPTIMIZER 
+    # 3. OPTIMIZER 
     optimizer = torch.optim.AdamW(
         params = model.parameters(),
         lr = config['training']['learning_rate'],
@@ -311,14 +311,25 @@ def train(
         weight_decay = config['training']['weight_decay'],
     )
 
-    # AMP SCALER ( FOR SPECIFIC FP 16 TRAINING STABILITY )
+    # 4. AMP SCALER ( FOR SPECIFIC FP 16 TRAINING STABILITY )
     use_amp = config['training']['mixed_precision'] and device.type == 'cuda'
     scaler = GradScaler(enabled = use_amp)
     
-    # TOTAL STEPS FOR LR SCHEDULING 
+    # 5. TOTAL STEPS FOR LR SCHEDULING 
     accum_steps     = config['training']['accumulation_steps']
     steps_per_epoch = len(train_loader) // accum_steps
     total_steps     = steps_per_epoch * config['training']['num_epochs']
     
+    # 6. CHECKPOINT RESUMPTION
+    
+    # 7. SAVE DIRECTORY + WANDB INITIALISATION
+    
+    """ MAIN TRAINING LOOP """
+    
+    """ POST-TRAINING CLEANUP """
+    
+    pass
+
+
 if __name__ == "__main__":
     pass
