@@ -297,9 +297,17 @@ def train(
     """ BUILD DATALOADERS """
     train_loader, val_loader, data_info = create_dataloaders(config_path = config_path, seed = config['training']['seed'])
 
-    
-    pass
+    """ BUILD MODEL """
+    model_config = WorldModelConfig.from_yaml(config_path = config_path)
+    model = HierarchicalWorldModel(config = model_config).to(device)
 
+    """ OPTIMIZER """
+    optimizer = torch.optim.AdamW(
+        params = model.parameters(),
+        lr = config['training']['learning_rate'],
+        betas = tuple(config['training']['betas']),
+        weight_decay = config['training']['weight_decay'],
+    )
 
 if __name__ == "__main__":
     pass
