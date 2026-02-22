@@ -273,7 +273,13 @@ def load_checkpoint(
     
     checkpoint = torch.load(path, map_location = device, weights_only = False)
     
-    pass
+    model.load_state_dict(state_dict = checkpoint['model_state_dict'])
+    optimizer.load_state_dict(state_dict = checkpoint['optimizer_state_dict'])
+    scaler.load_state_dict(state_dict = checkpoint['scaler_state_dict'])
+    
+    print(f"    CHECKPOINT LOADED from : {path}")
+    
+    return checkpoint['epoch'] + 1, checkpoint['global_step'], checkpoint['best_val_loss']
 
 def train(
 ):
