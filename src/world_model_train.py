@@ -273,7 +273,10 @@ def load_checkpoint(
     
     checkpoint = torch.load(path, map_location = device, weights_only = False)
     
+    # DESERLIASE WEIGHTS / BIASES 
     model.load_state_dict(state_dict = checkpoint['model_state_dict'])
+    
+    # DESERIALISE OPTIMIZER AND SCALER STATES (LEARNING RATES, MOMENTUM, SCALE FACTOR, ETC.)
     optimizer.load_state_dict(state_dict = checkpoint['optimizer_state_dict'])
     scaler.load_state_dict(state_dict = checkpoint['scaler_state_dict'])
     
@@ -288,5 +291,3 @@ def train(
 
 if __name__ == "__main__":
     pass
-
-    
