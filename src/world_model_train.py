@@ -311,11 +311,14 @@ def train(
         weight_decay = config['training']['weight_decay'],
     )
 
-    # AMP SCALER 
+    # AMP SCALER ( FOR SPECIFIC FP 16 TRAINING STABILITY )
     use_amp = config['training']['mixed_precision'] and device.type == 'cuda'
     scaler = GradScaler(enabled = use_amp)
     
     # TOTAL STEPS FOR LR SCHEDULING 
+    accum_steps     = config['training']['accumulation_steps']
+    steps_per_epoch = len(train_loader) // accum_steps
+    total_steps     = steps_per_epoch * config['training']['num_epochs']
     
 if __name__ == "__main__":
     pass
