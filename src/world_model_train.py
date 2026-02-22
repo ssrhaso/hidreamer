@@ -289,6 +289,11 @@ def train(
     resume_from : str = None,
     use_wandb : bool = True,
 ):
+    """ LOAD CONFIG """
+    
+    with open(config_path, 'r') as f:
+        cofing = yaml.safe_load(f)
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     
     pass
 
