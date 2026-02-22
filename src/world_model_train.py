@@ -285,7 +285,11 @@ def load_checkpoint(
     return checkpoint['epoch'] + 1, checkpoint['global_step'], checkpoint['best_val_loss']
 
 def train(
+    config_path : str = "configs/worldmodel.yaml",
+    resume_from : str = None,
+    use_wandb : bool = True,
 ):
+    
     pass
 
 
