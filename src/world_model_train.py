@@ -290,10 +290,13 @@ def train(
     use_wandb : bool = True,
 ):
     """ LOAD CONFIG """
-    
     with open(config_path, 'r') as f:
-        cofing = yaml.safe_load(f)
+        config = yaml.safe_load(f)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    
+    """ BUILD DATALOADERS """
+    train_loader, val_loader, data_info = create_dataloaders(config_path = config_path, seed = config['training']['seed'])
+
     
     pass
 

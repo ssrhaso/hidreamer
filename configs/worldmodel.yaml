@@ -23,12 +23,14 @@ model:
 
 # TRAINING
 training: 
+  seed : 42
   batch_size: 32
   seq_len: 64
   learning_rate: 0.0003
   weight_decay: 0.1
   grad_clip: 1.0
   num_epochs: 50
+
 
   warmup_steps: 1000      # Linear warmup before cosine decay
   betas : [0.9, 0.95 ]    # AdamW momentum parameters (GPT/STORM)
