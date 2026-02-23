@@ -1,4 +1,8 @@
-""" TRAINING SCRIPT FOR WORLD MODEL MODULE """
+""" TRAINING SCRIPT FOR WORLD MODEL MODULE 
+
+TERMINAL - wandb login
+COLAB    - import wandb; wandb.login() 
+"""
 import os
 import sys
 import math
