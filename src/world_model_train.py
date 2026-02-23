@@ -321,6 +321,22 @@ def train(
     total_steps     = steps_per_epoch * config['training']['num_epochs']
     
     # 6. CHECKPOINT RESUMPTION
+    start_epoch = 0,
+    global_step = 0,
+    best_val_loss = float('inf')
+    
+    if resume_from and os.path.isfile(resume_from):
+        
+        start_epoch, global_step, best_val_loss = load_checkpoint(
+            path = resume_from,
+            model = model,
+            optimizer = optimizer,
+            scaler = scaler,
+            device = device,
+        )
+    
+    
+    
     
     # 7. SAVE DIRECTORY + WANDB INITIALISATION
     
