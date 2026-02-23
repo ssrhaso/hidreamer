@@ -144,12 +144,14 @@ def test_smoke_checkpoint_roundtrip(tiny_config, dummy_batch, tmp_path):
 
 """ 4. FULL TRAIN() LOOP  —  mocked wandb, 2 epochs, stats dict valid """
 
-@patch("wandb.init",   return_value=MagicMock())
-@patch("wandb.log",    return_value=None)
-@patch("wandb.finish", return_value=None)
-@patch("wandb.watch",  return_value=None)
+@patch("wandb.init",         return_value=MagicMock())
+@patch("wandb.log",          return_value=None)
+@patch("wandb.finish",       return_value=None)
+@patch("wandb.watch",        return_value=None)
+@patch("wandb.Artifact",     return_value=MagicMock())      
+@patch("wandb.log_artifact", return_value=None)             
 def test_smoke_full_train_loop(
-    mock_watch, mock_finish, mock_log, mock_init,
+    mock_log_artifact, mock_artifact, mock_watch, mock_finish, mock_log, mock_init,  # update signature
     tiny_dataset_paths,
 ):
     """Run the 2-epoch train() from world_model_train.py end-to-end on CPU.
