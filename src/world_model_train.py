@@ -300,7 +300,7 @@ def train(
     train_loader, val_loader, data_info = create_dataloaders(config_path = config_path, seed = config['training']['seed'])
 
     # 2. BUILD MODEL 
-    model_config = WorldModelConfig.from_yaml(config_path = config_path)
+    model_config = WorldModelConfig.from_yaml(path = config_path)
     model = HierarchicalWorldModel(config = model_config).to(device)
 
     # 3. OPTIMIZER 
@@ -352,12 +352,128 @@ def train(
         )
         
     
-    
     """ MAIN TRAINING LOOP """
+    # SAFE DEFAULTS: if loop never runs (e.g. resuming a completed run), post-loop
+    # references to these variables will not raise NameError
+    epoch          = start_epoch - 1
+    avg_train_loss = float('nan')
+    avg_val_loss   = float('nan')
+    train_summary  = {k: float('nan') for k in ('loss_l0', 'loss_l1', 'loss_l2', 'accuracy_l0', 'accuracy_l1', 'accuracy_l2')}
+    val_summary    = {k: float('nan') for k in ('loss_l0', 'loss_l1', 'loss_l2', 'accuracy_l0', 'accuracy_l1', 'accuracy_l2')}
+
+    for epoch in range(start_epoch, config['training']['num_epochs']):
+        
+        avg_train_loss, global_step, train_metrics = train_one_epoch(
+            
+            model = model,
+            train_loader = train_loader,
+            optimizer = optimizer,
+            scaler = scaler,
+            config = config,
+            global_step = global_step,
+            total_steps = total_steps,
+            device = device,
+            epoch = epoch,
+            use_wandb = use_wandb,
+        )
+        
+        avg_val_loss, val_metrics = validate_one_epoch(
+            model = model,
+            val_loader = val_loader,
+            config = config,
+            device = device,
+            epoch = epoch,
+        )
+        
+        # SUMMARIES, WANDB LOGGING
+        train_summary = compute_metrics_summary(train_metrics)
+        val_summary = compute_metrics_summary(val_metrics)
+        
+        print(f"\nEPOCH {epoch+1} SUMMARY :")
+        print(f"    TRAIN LOSS : {avg_train_loss:.4f} | VAL LOSS : {avg_val_loss:.4f}")
+        print(f"    TRAIN ACCURACY L0 : {train_summary['accuracy_l0']:.3f} | VAL ACCURACY L0 : {val_summary['accuracy_l0']:.3f}")
+        print(f"    TRAIN ACCURACY L1 : {train_summary['accuracy_l1']:.3f} | VAL ACCURACY L1 : {val_summary['accuracy_l1']:.3f}")
+        print(f"    TRAIN ACCURACY L2 : {train_summary['accuracy_l2']:.3f} | VAL ACCURACY L2 : {val_summary['accuracy_l2']:.3f}")
+
+        # WANDB EPOCH-LEVEL LOGGING
+        if use_wandb:
+            wandb.log({
+                'epoch':                epoch + 1,
+                'train/loss_epoch':     avg_train_loss,
+                'val/loss_epoch':       avg_val_loss,
+                'train/loss_l0':        train_summary['loss_l0'],
+                'train/loss_l1':        train_summary['loss_l1'],
+                'train/loss_l2':        train_summary['loss_l2'],
+                'val/loss_l0':          val_summary['loss_l0'],
+                'val/loss_l1':          val_summary['loss_l1'],
+                'val/loss_l2':          val_summary['loss_l2'],
+                'train/accuracy_l0':    train_summary['accuracy_l0'],
+                'train/accuracy_l1':    train_summary['accuracy_l1'],
+                'train/accuracy_l2':    train_summary['accuracy_l2'],
+                'val/accuracy_l0':      val_summary['accuracy_l0'],
+                'val/accuracy_l1':      val_summary['accuracy_l1'],
+                'val/accuracy_l2':      val_summary['accuracy_l2'],
+            }, step=global_step)
+
+        # SAVE CHECKPOINTS IF BEST VALIDATION LOSS
+        if avg_val_loss < best_val_loss:
+            best_val_loss = avg_val_loss
+            save_checkpoint(
+                model = model,
+                optimizer = optimizer,
+                scaler = scaler,
+                epoch = epoch,
+                global_step = global_step,
+                best_val_loss = best_val_loss,
+                save_path = os.path.join(config['logging']['save_dir'], f"best_model.pt"),
+            )
+            
+        # PERIODIC CHECKPOINTS EVERY N EPOCHS (EVEN IF NOT BEST) FOR SAFETY AND ANALYSIS
+        if (epoch + 1) % config['logging']['save_every'] == 0:
+            save_checkpoint(
+                model = model,
+                optimizer = optimizer,
+                scaler = scaler,
+                epoch = epoch,
+                global_step = global_step,
+                best_val_loss = best_val_loss,
+                save_path = os.path.join(config['logging']['save_dir'], f"checkpoint_epoch_{epoch+1}.pt"),
+            )
+    
     
     """ POST-TRAINING CLEANUP """
+    # FINAL CHECKPOINT SAVE (ALWAYS SAVE FINAL MODEL AT THE END, EVEN IF NOT BEST, FOR ANALYSIS)
+    save_checkpoint(
+        model = model,
+        optimizer = optimizer,
+        scaler = scaler,
+        epoch = epoch,
+        global_step = global_step,
+        best_val_loss = best_val_loss,
+        save_path = os.path.join(config['logging']['save_dir'], f"final_model.pt"),
+    )
     
-    pass
+    # FINAL METRICS SUMMARY SAVE AS JSON FOR EASY ANALYSIS AND PLOTTING
+    stats = {
+        'final_train_loss' :        float(avg_train_loss),
+        'final_val_loss' :          float(avg_val_loss),
+        'final_train_accuracy_l0' : float(train_summary['accuracy_l0']),
+        'final_val_accuracy_l0' :   float(val_summary['accuracy_l0']),
+        'final_train_accuracy_l1' : float(train_summary['accuracy_l1']),
+        'final_val_accuracy_l1' :   float(val_summary['accuracy_l1']),
+        'final_train_accuracy_l2' : float(train_summary['accuracy_l2']),
+        'final_val_accuracy_l2' :   float(val_summary['accuracy_l2']),
+    }
+    with open(os.path.join(config['logging']['save_dir'], "final_metrics.json"), 'w') as f:
+        json.dump(stats, f, indent=4)
+    
+    # WANDB FINISH
+    if use_wandb:
+        wandb.finish()
+        
+    
+    return model, stats
+
 
 
 if __name__ == "__main__":

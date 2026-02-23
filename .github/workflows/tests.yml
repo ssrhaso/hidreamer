@@ -1,0 +1,64 @@
+name: Tests
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    name: pytest (CPU-only)
+    runs-on: ubuntu-latest
+
+    steps:
+      #  1. Checkout 
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      #  2. Python 
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+
+      #  3. CPU-only PyTorch (avoids ~2 GB GPU wheel download) 
+      - name: Install CPU-only PyTorch
+        run: |
+          pip install torch torchvision torchaudio \
+            --index-url https://download.pytorch.org/whl/cpu
+
+      #  4. Project dependencies 
+      - name: Install project dependencies
+        run: |
+          pip install \
+            numpy \
+            scipy \
+            pyyaml \
+            tqdm \
+            wandb \
+            pytest \
+            pytest-cov \
+            pytest-timeout
+
+      #  5. Run tests 
+
+      # -m "not integration and not gpu"  →  skip tests that need real checkpoints
+      # --timeout=60                      →  enforce 60-second wall-clock limit
+      - name: Run pytest
+        run: |
+          pytest tests/ \
+            -v \
+            --timeout=60 \
+            -m "not integration and not gpu" \
+            --cov=src \
+            --cov-report=xml \
+            --cov-report=term-missing
+
+      #  6. Upload coverage 
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: ./coverage.xml
+          fail_ci_if_error: false
