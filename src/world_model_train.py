@@ -202,7 +202,7 @@ def validate_one_epoch(
         actions = actions.to(device)
         
         """ FORWARD PASS """
-        with autocast("cuda", enabled = use_amp):
+        with autocast(device_type = device.type, enabled = use_amp):
             
             # MODEL OUTPUTS
             logits_l0, logits_l1, logits_l2 = model(tokens, actions) 
@@ -321,8 +321,8 @@ def train(
     total_steps     = steps_per_epoch * config['training']['num_epochs']
     
     # 6. CHECKPOINT RESUMPTION
-    start_epoch = 0,
-    global_step = 0,
+    start_epoch = 0
+    global_step = 0
     best_val_loss = float('inf')
     
     if resume_from and os.path.isfile(resume_from):
@@ -335,10 +335,23 @@ def train(
             device = device,
         )
     
-    
-    
-    
     # 7. SAVE DIRECTORY + WANDB INITIALISATION
+    os.makedirs(config['logging']['save_dir'], exist_ok = True)
+    
+    if use_wandb:
+        wandb.init(
+            project = "hi-dreamer-world-model",
+            config = config,
+            resume = "allow" if resume_from else False,
+        )
+        
+        wandb.watch(
+            models = model,
+            log = 'gradients',
+            log_freq = 100,
+        )
+        
+    
     
     """ MAIN TRAINING LOOP """
     
