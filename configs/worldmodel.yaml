@@ -13,8 +13,8 @@ model:
     num_actions :  9        # NUMBER OF POSSIBLE ACTIONS                    - ATARI100K has 9 discrete actions
     
     # HIERARCHICAL LOSS (NOVELTY)
-    layer_weights : [1.0, 0.5, 0.1]   # WEIGHTS FOR EACH HRVQ LAYER LOSS    # HIGHER WEIGHTING FOR FINAL PIXEL RECONSTRUCTION, 
-                                                                            # LOWER FOR COARSE REPRESENTATION
+    layer_weights : [1.0, 0.5, 0.1]   # WEIGHTS FOR EACH HRVQ LAYER LOSS    # HIGHER WEIGHTING FOR COARSE LAYER (L0 = PHYSICS),
+                                                                            # LOWER FOR FINE LAYER (L2 = OBJECTS)
 
 
 
