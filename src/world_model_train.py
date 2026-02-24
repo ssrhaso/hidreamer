@@ -431,6 +431,23 @@ def train(
                 best_val_loss = best_val_loss,
                 save_path = os.path.join(config['logging']['save_dir'], f"best_model.pt"),
             )
+
+            # IF USING WANDB, LOG BEST MODEL AS ARTIFACT FOR EASY VERSIONING AND REPRODUCIBILITY
+            if use_wandb:
+                artifact = wandb.Artifact(
+                name='hi-dreamer-best-model',
+                type='model',
+                metadata={
+                    'epoch': epoch + 1,
+                    'val_loss': avg_val_loss,
+                    'val_accuracy_l0': val_summary['accuracy_l0'],
+                    'val_accuracy_l1': val_summary['accuracy_l1'],
+                    'val_accuracy_l2': val_summary['accuracy_l2'],
+                    }
+                )
+                artifact.add_file(os.path.join(config['logging']['save_dir'], 'best_model.pt'))
+                wandb.log_artifact(artifact)
+        
             
         # PERIODIC CHECKPOINTS EVERY N EPOCHS (EVEN IF NOT BEST) FOR SAFETY AND ANALYSIS
         if (epoch + 1) % config['logging']['save_every'] == 0:
