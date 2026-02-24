@@ -8,3 +8,5 @@ archive/data/
 checkpoints/
 
 __pycache__/
+
+ignore/
