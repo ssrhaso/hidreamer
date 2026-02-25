@@ -1,0 +1,62 @@
+# HI-DREAMER POLICY TRAINING CONFIG
+# Hyperparameters justified by DreamerV3 (Hafner et al., Nature 2025) 
+# and TWISTER (Burchi & Timofte, ICLR 2025)
+
+policy:
+  # ARCHITECTURE
+  feature_mode: "concat"     # "concat" (1152D, Option A) or "attention" (384D, Option C)
+  hidden_dim: 512            # MLP width for actor/critic (DreamerV3: 512)
+  
+  # ENV
+  game: "Pong-v5"           # Start with simplest game (6 actions)
+  num_actions: 6             # Pong=6, Breakout=4, MsPacman=9
+  
+  # IMAGINATION
+  horizon: 15                # Steps to imagine ahead (DreamerV3: 15, TWISTER: 15)
+  temperature: 1.0           # Sampling temperature during imagination
+  seed_context_len: 16       # Timesteps of real context to seed imagination
+  batch_size: 16             # Imagination batch size (limited by T4 VRAM)
+  
+  # OPTIMIZATION
+  actor_lr: 3.0e-5           # DreamerV3 actor LR
+  critic_lr: 3.0e-5          # DreamerV3 critic LR (same as actor in V3)
+  aux_lr: 1.0e-4             # Reward/continue predictor LR (higher — supervised)
+  
+  # λ-Returns (DreamerV3 Eq. 7) 
+  gamma: 0.997               # Discount factor (DreamerV3 default)
+  lambda: 0.95               # λ for GAE-style returns (DreamerV3 default)
+  
+  # REGULARIZATION
+  entropy_scale: 3.0e-4      # DreamerV3: 3e-4 for discrete actions
+  ema_tau: 0.02              # Slow target EMA rate (DreamerV3)
+  unimix: 0.01               # Policy uniform mixture (DreamerV3: 1%)
+  
+  # TRAINING LOOP
+  total_steps: 200000        # Total imagination training steps
+  collect_every: 1           # Collect real step every N training steps
+  aux_batches: 1             # Auxiliary training batches per step
+  eval_every: 10000          # Evaluate every N steps
+  log_every: 100             # Log every N steps
+  prefill_steps: 1000        # Random steps before training starts
+  
+  # OFFLINE MODE
+  # If true, skip real env interaction and train purely from pre-collected buffer
+  # Useful when you already have 100K transitions per game from data collection
+  offline_mode: true
+
+# FROZEN MODEL PATHS 
+frozen_models:
+  world_model: "checkpoints/world_model_40e.pt"      # REQUIRED keys: model_state_dict, epoch, ...
+  hrvq_tokenizer: "checkpoints/rsvq_model_best.pth"  # REQUIRED raw state_dict (no wrapper dict)
+  encoder: "checkpoints/encoder_best_3games.pt"      # OPTIONAL ONLINE keys: model_state_dict, epoch, loss
+
+# DATA PATHS 
+data:
+  tokens_dir: "checkpoints/rsvq_tokens"
+  replay_dir: "data"
+  games: ["Pong-v5", "Breakout-v5", "MsPacman-v5"]
+
+# LOGGING
+logging:
+  save_dir: "checkpoints/policy"
+  wandb_project: "hi-dreamer-policy"
