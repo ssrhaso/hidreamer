@@ -12,17 +12,27 @@ import torch.distributions as D
 from typing import Tuple, Optional
 import math
 
-def symlog(x):
+# SYMLOG / SYMEXP TRANSFORMS FOR REWARDS AND VALUES TO HANDLE ATARI'S WIDE REWARD SCALE 
+def symlog(
+    x : torch.Tensor
+    ) -> torch.Tensor:
     """Compress large magnitudes: sign(x) * ln(|x| + 1). 
     
     Keeps small values ~unchanged, squashes 999 -> 6.9.
     Applied to reward targets and critic values so Breakout's large rewards don't dominate Pong's small ones."""
+    
+    return torch.sign(x) * torch.log1p(torch.abs(x))
 
-def symexp(x):
+def symexp(
+    x : torch.Tensor
+    ) -> torch.Tensor:
     """Inverse of symlog: sign(x) * (exp(|x|) - 1). 
     
     Decompress predictions back to real scale."""
+    return torch.sign(x) * (torch.expm1(torch.abs(x)) - 1)
 
+
+# POLICY NETWORKS
 class HierarchicalFeatureExtractor(nn.Module):
     """Converts HRVQ token indices -> dense feature vector by looking up frozen codebook embeddings.
     
