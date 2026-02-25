@@ -12,35 +12,68 @@ import torch.distributions as D
 from typing import Tuple, Optional
 import math
 
-def symlog():
-    pass
+def symlog(x):
+    """Compress large magnitudes: sign(x) * ln(|x| + 1). 
+    
+    Keeps small values ~unchanged, squashes 999 -> 6.9.
+    Applied to reward targets and critic values so Breakout's large rewards don't dominate Pong's small ones."""
 
-def symexp():
-    pass   
+def symexp(x):
+    """Inverse of symlog: sign(x) * (exp(|x|) - 1). 
+    
+    Decompress predictions back to real scale."""
 
 class HierarchicalFeatureExtractor(nn.Module):
-    pass
+    """Converts HRVQ token indices -> dense feature vector by looking up frozen codebook embeddings.
+    
+    Concat mode: [codebook_0[L0] | codebook_1[L1] | codebook_2[L2]] → 1152D.
+    Attention mode: 3-token self-attention over the three layer embeddings -> pooled 384D."""
 
 class PolicyNetwork(nn.Module):
-    pass
+    """ The Actor. 
+    
+    Maps 1152D feature -> categorical distribution over Atari actions.
+    LayerNorm -> 2-layer MLP (ELU) -> softmax with 1% uniform mix to prevent collapse.
+    Zero-init final layer -> uniform initial policy -> unbiased exploration at start."""
+
 
 class ValueNetwork(nn.Module):
-    pass
+    """ The Critic. 
+    
+    Maps 1152D feature -> scalar 'how good is this state?'
+    Same architecture as actor but outputs 1 value instead of num_actions logits.
+    Separate from actor to avoid gradient interference (MSE vs REINFORCE scales differ)."""
 
 class RewardPredictor(nn.Module):
-    pass
+    """Predicts immediate reward from state features in symlog space.
+    
+    Trained supervised on real transitions (where true rewards exist).
+    Used during imagination to provide reward signal when no real env is available."""
 
 class ContinueNetwork(nn.Module):
-    pass
+    """Predicts p(episode continues) as a logit -> sigmoid for probability.
+    
+    Bias-initialized positive (sigmoid(2)≈0.88) because 99% of Atari steps aren't terminal.
+    During imagination: effective_discount = gamma * p(continue), soft-truncating near game-over states."""
 
-class SlowValueTarget(nn.Module):
-    pass
+class SlowValueTarget:
+    """EMA copy of the critic updated at τ=0.02 per step for stable λ-return targets.
+    
+    Solves the moving-target problem: critic can't train on its own rapidly-changing predictions.
+    Same technique as DDPG, SAC, DreamerV3."""
 
 def compute_lambda_returns():
-    pass
+    """Backwards-recursive λ-return: blends 1-step TD (low variance) with Monte Carlo (low bias).
+    G_t = r_t + Y * c_t * [(1-λ)*V(s_{t+1}) + λ*G_{t+1}]. 
+    
+    λ=0.95 uses 95% of long-horizon info.
+    Returns (B, H) targets that the critic is trained to predict."""
 
 class ReturnNormalizer:
-    pass
+    """Normalizes advantages by the 5th-95th percentile range of recent returns.
+    
+    Robust under sparse rewards where std≈0 would cause division-by-zero explosion.
+    EMA-tracked percentiles (decay=0.99) adapt smoothly as training progresses."""
 
 def count_policy_params():
-    pass
+    """Counts trainable parameters across all four networks. Sanity check: should be ~1.5-3M total"""
