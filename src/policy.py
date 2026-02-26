@@ -50,8 +50,25 @@ class HierarchicalFeatureExtractor(nn.Module):
         self.d_model = d_model
         self.hrvq = hrvq_tokenizer # FROZEN 
         
+        if mode == "concat":
+            self.feat_dim = d_model * 3  # 1152 Dimension (3 layers * 384 each)
         
-
+        elif mode == "attention":
+            self.feat_dim = d_model      # 384 Dimension (pooled output)
+            
+            # 3 TOKEN SELF ATTENTION LAYER AGGREGRATION
+            self.cross_attn = nn.MultiheadAttention(
+                embed_dim = d_model, # 384 DIM
+                num_heads = 4,       # 4 HEADS
+                dropout = 0.0,       # 0.0 DROPOUT SINCE FEATURE EXTRACTION
+                batch_first = True  
+            )
+            
+        else:
+            raise ValueError(f"Unknown Mode : {mode}. Use 'concat' or 'attention'.")
+            
+            
+            
 class PolicyNetwork(nn.Module):
     """ The Actor. 
     
