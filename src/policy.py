@@ -63,6 +63,8 @@ class HierarchicalFeatureExtractor(nn.Module):
                 dropout = 0.0,       # 0.0 DROPOUT SINCE FEATURE EXTRACTION
                 batch_first = True  
             )
+            self.attn_norm = nn.LayerNorm(d_model)  # LAYER NORM FOR ATTENTION OUTPUT
+            self.feat_dim = d_model                 # FINAL FEATURE DIMENSION AFTER ATTENTION (384)
             
         else:
             raise ValueError(f"Unknown Mode : {mode}. Use 'concat' or 'attention'.")
@@ -79,7 +81,31 @@ class HierarchicalFeatureExtractor(nn.Module):
         emb_l2 = self.hrvq.vq_layers[2].codebook(tokens[:, 2]) # (B, 384)
         
         return emb_l0, emb_l1, emb_l2
-            
+    
+    def forward(
+        self,
+        tokens : torch.Tensor, 
+    )-> torch.Tensor:
+        """ Forward Pass """
+        
+        # LOOKUP CODEBOOK EMBEDDINGS FOR EACH LAYER 
+        emb_l0, emb_l1, emb_l2 = self._lookup_codebooks(tokens) # (B, 384) each
+        
+        # OPTION A - CONCATENATE LAYER EMBEDDINGS 
+        if self.mode == "concat":
+            feat = torch.cat([emb_l0, emb_l1, emb_l2], dim = -1) # (B, 1152)
+        
+        # OPTION B - ATTENTION OVER LAYER EMBEDDINGS 
+        
+        elif self.mode == "attention":
+            seq = torch.stack(tensors = [emb_l0, emb_l1, emb_l2], dim = 1)  # (B, 3, 384)
+            attended, _ = self.cross_attn(seq, seq, seq)        # (B, 3, 384)
+            attended = self.attn_norm(attended + seq)           # RESIDUAL + NORM 
+            feat = attended.mean(dim = 1)                         # MEAN POOL (B, 384) 
+        
+        return feat
+    
+        
             
 class PolicyNetwork(nn.Module):
     """ The Actor. 
