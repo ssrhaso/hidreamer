@@ -66,7 +66,19 @@ class HierarchicalFeatureExtractor(nn.Module):
             
         else:
             raise ValueError(f"Unknown Mode : {mode}. Use 'concat' or 'attention'.")
-            
+    
+    @torch.no_grad()
+    def _lookup_codebooks(
+        self,
+        tokens : torch.Tensor,  
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Look up codebook embeddings for each HRVQ layer """
+        
+        emb_l0 = self.hrvq.vq_layers[0].codebook(tokens[:, 0]) # (B, 384)
+        emb_l1 = self.hrvq.vq_layers[1].codebook(tokens[:, 1]) # (B, 384)
+        emb_l2 = self.hrvq.vq_layers[2].codebook(tokens[:, 2]) # (B, 384)
+        
+        return emb_l0, emb_l1, emb_l2
             
             
 class PolicyNetwork(nn.Module):
