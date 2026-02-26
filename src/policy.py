@@ -36,8 +36,21 @@ def symexp(
 class HierarchicalFeatureExtractor(nn.Module):
     """Converts HRVQ token indices -> dense feature vector by looking up frozen codebook embeddings.
     
-    Concat mode: [codebook_0[L0] | codebook_1[L1] | codebook_2[L2]] → 1152D.
-    Attention mode: 3-token self-attention over the three layer embeddings -> pooled 384D."""
+    OPTION 1 - Concat mode: [codebook_0[L0] | codebook_1[L1] | codebook_2[L2]] → 1152D.
+    OPTION 2 - Attention mode: 3-token self-attention over the three layer embeddings -> pooled 384D."""
+    
+    def __init__(
+        self,
+        hrvq_tokenizer, # FROZEN - used only for lookups
+        mode : str = 'concat', # 'concat' or 'attention'
+        d_model : int = 384,   # only used for attention mode
+    ):
+        super().__init__()
+        self.mode = mode
+        self.d_model = d_model
+        self.hrvq = hrvq_tokenizer # FROZEN 
+        
+        
 
 class PolicyNetwork(nn.Module):
     """ The Actor. 
