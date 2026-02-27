@@ -170,6 +170,21 @@ class ValueNetwork(nn.Module):
     Maps 1152D feature -> scalar 'how good is this state?'
     Same architecture as actor but outputs 1 value instead of num_actions logits.
     Separate from actor to avoid gradient interference (MSE vs REINFORCE scales differ)."""
+    
+    def __init__(
+        self,
+        feat_dim : int,         # CONCAT = 1152, ATTENTION = 384
+        hidden_dim : int = 512, # SIZE OF HIDDEN LAYER IN MLP
+    ):
+        super().__init__()
+        pass
+    
+    def forward(
+        self,
+        feat : torch.Tensor,
+    ) -> torch.Tensor:
+        """ Forward Pass, returns scalar value prediction for given state """
+        pass
 
 class RewardPredictor(nn.Module):
     """Predicts immediate reward from state features in symlog space.
