@@ -177,14 +177,28 @@ class ValueNetwork(nn.Module):
         hidden_dim : int = 512, # SIZE OF HIDDEN LAYER IN MLP
     ):
         super().__init__()
-        pass
-    
+        
+        self.net = nn.Sequential(
+            nn.LayerNorm(normalized_shape = feat_dim), 
+            nn.Linear(in_features = feat_dim, out_features = hidden_dim), 
+            nn.SiLU(), 
+            nn.Linear(in_features = hidden_dim, out_features = hidden_dim), 
+            nn.SiLU() ,
+            nn.Linear(in_features = hidden_dim, out_features = 1) ,
+        )
+        
+        # ZERO INITIALISATION FOR STABLE STARTING VALUE PREDICTIONS
+        nn.init.zeros_(tensor = self.net[-1].weight)
+        nn.init.zeros_(tensor = self.net[-1].bias)
+        
     def forward(
         self,
         feat : torch.Tensor,
     ) -> torch.Tensor:
         """ Forward Pass, returns scalar value prediction for given state """
-        pass
+        
+        value = self.net(feat).squeeze(-1) # (B,) SCALAR VALUE PREDICTION
+        return value
 
 class RewardPredictor(nn.Module):
     """Predicts immediate reward from state features in symlog space.
