@@ -123,7 +123,7 @@ class PolicyNetwork(nn.Module):
     ):
         # SETUP 
         super().__init__()
-        self.num_actions
+        self.num_actions = num_actions
         self.unimix = unimix
         
         # NETWORK ARCHITECTURE, DreamerV3
@@ -140,7 +140,29 @@ class PolicyNetwork(nn.Module):
         nn.init.zeros_(tensor = self.net[-1].weight)
         nn.init.zeros_(tensor = self.net[-1].bias)
         
+    def forward(
+        self,
+        feat : torch.Tensor,
+    ) -> D.Categorical: 
+        """ Forward Pass, returns Categorical Distribution over actions in given state """
         
+        # PASS MLP TO GET ACTION LOGITS
+        logits = self.net(feat)
+        
+        # UNIMIX BLENDING TO PREVENT COLLAPSE EARLY IN TRAINING
+        
+        if self.unimix > 0:
+            
+            probs = F.softmax(input = logits, dim = -1)                        # SOFTMAX - PROBABILITY DISTRIBUTION
+            uniform_probs = torch.ones_like(input = probs) / self.num_actions  # UNIFORM DISTRIBUTION OVER ACTIONS
+            probs = (1 - self.unimix) * probs + self.unimix * uniform_probs    # BLEND WITH UNIFORM
+            dist = D.Categorical(probs = probs)                                # CATEGORICAL DISTRIBUTION
+        
+        else:
+            dist = D.Categorical(logits = logits)                              # NO UNIMIX, STANDARD CATEGORICAL
+        
+        return dist
+    
 
 class ValueNetwork(nn.Module):
     """ The Critic. 
