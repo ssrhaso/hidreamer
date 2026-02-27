@@ -114,6 +114,33 @@ class PolicyNetwork(nn.Module):
     LayerNorm -> 2-layer MLP (ELU) -> softmax with 1% uniform mix to prevent collapse.
     Zero-init final layer -> uniform initial policy -> unbiased exploration at start."""
 
+    def __init__(
+        self,
+        feat_dim : int,                 # CONCAT = 1152, ATTENTION = 384
+        num_actions : int,              # GAME SPECIFIC (PONG = 6, BREAKOUT = 4, MsPACMAN = 9)
+        hidden_dim : int = 512,         # SIZE OF HIDDEN LAYER IN MLP
+        unimix : float = 0.01,          # DreamerV3 = 1%
+    ):
+        # SETUP 
+        super().__init__()
+        self.num_actions
+        self.unimix = unimix
+        
+        # NETWORK ARCHITECTURE, DreamerV3
+        self.net = nn.Sequential(
+            nn.LayerNorm(normalized_shape = feat_dim), 
+            nn.Linear(in_features = feat_dim, out_features = hidden_dim), 
+            nn.SiLU(), 
+            nn.Linear(in_features = hidden_dim, out_features = hidden_dim), 
+            nn.SiLU() ,
+            nn.Linear(in_features = hidden_dim, out_features = num_actions) ,
+        )
+        
+        # ZERO INITIALISATION - UNBIASED STARTING POLICY CONTRARY TO KAIMING INIT (PYTORCH DEFAULT)
+        nn.init.zeros_(tensor = self.net[-1].weight)
+        nn.init.zeros_(tensor = self.net[-1].bias)
+        
+        
 
 class ValueNetwork(nn.Module):
     """ The Critic. 
