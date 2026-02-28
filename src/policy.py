@@ -205,6 +205,23 @@ class RewardPredictor(nn.Module):
     
     Trained supervised on real transitions (where true rewards exist).
     Used during imagination to provide reward signal when no real env is available."""
+    
+    def __init__(
+        self,
+        feat_dim : int,         # CONCAT = 1152, ATTENTION = 384
+        hidden_dim : int = 512, # SIZE OF HIDDEN LAYER IN MLP
+    ):
+        super().__init__()
+        pass
+
+    def forward(
+        self,
+        feat : torch.Tensor,
+    ) -> torch.Tensor:
+        """ Forward Pass, returns scalar reward prediction for given state features """
+
+        pass
+    
 
 class ContinueNetwork(nn.Module):
     """Predicts p(episode continues) as a logit -> sigmoid for probability.
