@@ -234,7 +234,7 @@ class RewardPredictor(nn.Module):
     ) -> torch.Tensor:
         """ Forward Pass, returns scalar reward prediction for given state features """
 
-        pass
+        return self.net(feat).squeeze(-1) # (B,) SCALAR REWARD PREDICTION
     
 
 class ContinueNetwork(nn.Module):
