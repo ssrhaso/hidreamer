@@ -212,7 +212,21 @@ class RewardPredictor(nn.Module):
         hidden_dim : int = 512, # SIZE OF HIDDEN LAYER IN MLP
     ):
         super().__init__()
-        pass
+        
+        # SAME ARCHITECTURE AS CRITIC BUT OUTPUTS 1 VALUE (REWARD PREDICTION) INSTEAD OF VALUE PREDICTION
+        self.net = nn.Sequential(
+            nn.LayerNorm(normalized_shape = feat_dim), 
+            nn.Linear(in_features = feat_dim, out_features = hidden_dim), 
+            nn.SiLU(), 
+            nn.Linear(in_features = hidden_dim, out_features = hidden_dim), 
+            nn.SiLU() ,
+            nn.Linear(in_features = hidden_dim, out_features = 1) ,
+        )
+        
+        # ZERO INITIALISATION FOR STABLE STARTING REWARD PREDICTIONS
+        nn.init.zeros_(tensor = self.net[-1].weight)
+        nn.init.zeros_(tensor = self.net[-1].bias)
+        
 
     def forward(
         self,
