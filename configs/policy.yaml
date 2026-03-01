@@ -12,7 +12,14 @@ policy:
   num_actions: 6             # Pong=6, Breakout=4, MsPacman=9
   
   # IMAGINATION
-  horizon: 15                # Steps to imagine ahead (DreamerV3: 15, TWISTER: 15)
+  horizon_mode: "decay"      # SWAP THIS to compare: "flat" , "decay" , "bell"
+                             #   flat:  H=30 always          (baseline)
+                             #   decay: 30→5  cosine         (explore early, exploit late)
+                             #   bell:  5→30→5 cosine        (ramp up then compress)
+
+  max_horizon: 30            # Upper bound of schedule (flat: constant H)
+  min_horizon: 5             # Lower bound of schedule (flat: ignored)
+ 
   temperature: 1.0           # Sampling temperature during imagination
   seed_context_len: 16       # Timesteps of real context to seed imagination
   batch_size: 16             # Imagination batch size (limited by T4 VRAM)
