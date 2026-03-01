@@ -40,7 +40,31 @@ def get_horizon(
     min_horizon : int = 5,
     mode : str = "decay", # "flat" , "decay" , "bell"
 ) -> int:
-    pass
+    """ Unified Horizon Scheduler for Imagination Rollouts.
+    
+    mode = "flat" 15: constant horizon (baseline). (15 in DreamerV3, 15 in TWISTER)
+    mode = "decay" 30-> 5: cosine decay from max_horizon to min_horizon. (explore more early, exploit more late)
+    mode = "bell" 5->30->5: cosine bell curve peaking at mid-training for a ramp-up then compression curriculum.
+    """
+    
+    progress = min(1.0, current_step / max(total_steps, 1))  # Normalize progress to [0, 1]
+    
+    # 15 STEP CONSTANT HORIZON (DREAMERV3 DEFAULT) [15]
+    if mode == "flat":
+        return max_horizon 
+    
+    # COSINE DECAY FROM MAX_HORIZON TO MIN_HORIZON [30 -> 5]
+    elif mode == "decay":
+        cosine = 0.5 * (1.0 + math.cos(math.pi * progress))  # Cosine from 1 initial to 0 at end
+        return int(round(min_horizon + (max_horizon - min_horizon) * cosine))
+    
+    # COSINE BELL CURVE FROM MIN TO MAX BACK TO MIN [5 -> 30 -> 5]
+    elif mode == "bell":
+        cosine = 0.5 * (1.0 + math.cos(2.0 * math.pi * progress))  # Cosine bell from 0 to 1 to 0
+        return int(round(min_horizon + (max_horizon - min_horizon) * cosine))
+
+    else:
+        raise ValueError(f"Unknown horizon mode: {mode}. Use 'flat', 'decay', or 'bell'.")
 
 # POLICY NETWORKS
 class HierarchicalFeatureExtractor(nn.Module):
