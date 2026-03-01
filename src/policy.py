@@ -12,6 +12,7 @@ import torch.distributions as D
 from typing import Tuple, Optional
 import math
 
+""" HELPER FUNCTIONS """
 # SYMLOG / SYMEXP TRANSFORMS FOR REWARDS AND VALUES TO HANDLE ATARI'S WIDE REWARD SCALE 
 def symlog(
     x : torch.Tensor
@@ -31,6 +32,15 @@ def symexp(
     Decompress predictions back to real scale."""
     return torch.sign(x) * (torch.expm1(torch.abs(x)) - 1)
 
+# GET HORIZON SCHEDULE FOR IMAGINATION
+def get_horizon(
+    current_step : int,
+    total_steps : int,
+    max_horizon : int = 30,
+    min_horizon : int = 5,
+    mode : str = "decay", # "flat" , "decay" , "bell"
+) -> int:
+    pass
 
 # POLICY NETWORKS
 class HierarchicalFeatureExtractor(nn.Module):
@@ -107,7 +117,7 @@ class HierarchicalFeatureExtractor(nn.Module):
     
         
             
-class PolicyNetwork(nn.Module):
+class ActorNetwork(nn.Module):
     """ The Actor. 
     
     Maps 1152D feature -> categorical distribution over Atari actions.
@@ -164,7 +174,7 @@ class PolicyNetwork(nn.Module):
         return dist
     
 
-class ValueNetwork(nn.Module):
+class CriticNetwork(nn.Module):
     """ The Critic. 
     
     Maps 1152D feature -> scalar 'how good is this state?'
@@ -200,7 +210,7 @@ class ValueNetwork(nn.Module):
         value = self.net(feat).squeeze(-1) # (B,) SCALAR VALUE PREDICTION
         return value
 
-class RewardPredictor(nn.Module):
+class RewardNetwork(nn.Module):
     """Predicts immediate reward from state features in symlog space.
     
     Trained supervised on real transitions (where true rewards exist).
