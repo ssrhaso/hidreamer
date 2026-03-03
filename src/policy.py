@@ -60,7 +60,7 @@ def get_horizon(
     
     # COSINE BELL CURVE FROM MIN TO MAX BACK TO MIN [5 -> 30 -> 5]
     elif mode == "bell":
-        cosine = 0.5 * (1.0 + math.cos(2.0 * math.pi * progress))  # Cosine bell from 0 to 1 to 0
+        cosine = 0.5 * (1.0 - math.cos(2.0 * math.pi * progress))  # Cosine bell from 0 to 1 to 0
         return int(round(min_horizon + (max_horizon - min_horizon) * cosine))
 
     else:
@@ -277,6 +277,23 @@ class ContinueNetwork(nn.Module):
     Bias-initialized positive (sigmoid(2)≈0.88) because 99% of Atari steps aren't terminal.
     During imagination: effective_discount = gamma * p(continue), soft-truncating near game-over states."""
 
+    def __init__(
+        self,
+        feat_dim : int,         # CONCAT = 1152, ATTENTION = 384
+        hidden_dim : int = 512, # SIZE OF HIDDEN LAYER IN MLP
+    ):
+        super().__init__()
+        pass
+
+    def forward(
+        self,
+        feat : torch.Tensor,
+    ) -> torch.Tensor:
+        """ Forward Pass, returns raw continue logit for given state features, 
+        indicating how likely the episode is to continue from this state (game over). """
+
+        pass
+    
 class SlowValueTarget:
     """EMA copy of the critic updated at τ=0.02 per step for stable λ-return targets.
     
