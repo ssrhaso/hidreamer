@@ -30,7 +30,7 @@ def symexp(
     """Inverse of symlog: sign(x) * (exp(|x|) - 1). 
     
     Decompress predictions back to real scale."""
-    return torch.sign(x) * (torch.expm1(torch.abs(x)) - 1)
+    return torch.sign(x) * (torch.expm1(torch.abs(x)))
 
 # GET HORIZON SCHEDULE FOR IMAGINATION
 def get_horizon(
@@ -283,7 +283,19 @@ class ContinueNetwork(nn.Module):
         hidden_dim : int = 512, # SIZE OF HIDDEN LAYER IN MLP
     ):
         super().__init__()
-        pass
+        self.net = nn.Sequential(
+            nn.LayerNorm(normalized_shape = feat_dim), 
+            nn.Linear(in_features = feat_dim, out_features = hidden_dim), 
+            nn.SiLU(), 
+            nn.Linear(in_features = hidden_dim, out_features = hidden_dim), 
+            nn.SiLU() ,
+            nn.Linear(in_features = hidden_dim, out_features = 1) ,
+        )
+        
+        # ZERO INITIALISATION WITH POSITIVE BIAS FOR HIGH INITIAL CONTINUE PROBABILITY (ATARI IS 99% NON-TERMINAL STEPS)
+        nn.init.zeros_(tensor = self.net[-1].weight)
+        nn.init.constant_(tensor = self.net[-1].bias, val = 2.0) # SIGMOID(2) ≈ 0.88, CLOSE TO REAL 0.99 TO PREVENT EARLY IMAGINATION COLLAPSE
+        
 
     def forward(
         self,
@@ -291,8 +303,8 @@ class ContinueNetwork(nn.Module):
     ) -> torch.Tensor:
         """ Forward Pass, returns raw continue logit for given state features, 
         indicating how likely the episode is to continue from this state (game over). """
-
-        pass
+        
+        return self.net(feat).squeeze(-1) # (B,) SCALAR CONTINUE LOGIT
     
 class SlowValueTarget:
     """EMA copy of the critic updated at τ=0.02 per step for stable λ-return targets.
