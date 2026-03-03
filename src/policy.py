@@ -306,11 +306,40 @@ class ContinueNetwork(nn.Module):
         
         return self.net(feat).squeeze(-1) # (B,) SCALAR CONTINUE LOGIT
     
-class SlowValueTarget:
-    """EMA copy of the critic updated at τ=0.02 per step for stable λ-return targets.
+    
+class CriticMovingAverage(nn.Module):
+    """Expontential Moving Average copy of the critic updated at τ=0.02 per step for stable λ-return targets.
     
     Solves the moving-target problem: critic can't train on its own rapidly-changing predictions.
     Same technique as DDPG, SAC, DreamerV3."""
+    def __init__(
+        self,
+        value_net : CriticNetwork, # CRITIC NETWORK TO COPY
+        tau : float = 0.02,        # EMA UPDATE RATE
+    ):
+        import copy 
+        self.target_net = copy.deepcopy(value_net) # INITIAL COPY OF CRITIC
+        self.target_net.requires_grad_(False)      # FROZEN TARGET NETWORK
+        self.target_net.eval()                     # EVAL MODE FOR STABILITY
+        self.tau = tau
+        
+    @torch.no_grad()
+    def update(
+        self,
+        value_net : CriticNetwork, # CRITIC NETWORK TO TRACK
+    ):
+        """ EMA Update 2% towards Online Critic """
+        pass
+    
+    def forward(
+        self,
+        feat : torch.Tensor,
+    ) -> torch.Tensor:
+        """ Forward Pass, returns stable value estimates for λ-return targets """
+        pass
+    
+    
+    
 
 def compute_lambda_returns():
     """Backwards-recursive λ-return: blends 1-step TD (low variance) with Monte Carlo (low bias).
