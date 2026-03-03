@@ -11,6 +11,7 @@ import torch.nn.functional as F
 import torch.distributions as D
 from typing import Tuple, Optional
 import math
+import copy 
 
 """ HELPER FUNCTIONS """
 # SYMLOG / SYMEXP TRANSFORMS FOR REWARDS AND VALUES TO HANDLE ATARI'S WIDE REWARD SCALE 
@@ -314,11 +315,12 @@ class CriticMovingAverage(nn.Module):
     Same technique as DDPG, SAC, DreamerV3."""
     def __init__(
         self,
-        value_net : CriticNetwork, # CRITIC NETWORK TO COPY
+        critic : CriticNetwork,    # CRITIC NETWORK TO COPY
         tau : float = 0.02,        # EMA UPDATE RATE
     ):
-        import copy 
-        self.target_net = copy.deepcopy(value_net) # INITIAL COPY OF CRITIC
+
+        super().__init__()
+        self.target_net = copy.deepcopy(critic)    # INITIAL COPY OF CRITIC
         self.target_net.requires_grad_(False)      # FROZEN TARGET NETWORK
         self.target_net.eval()                     # EVAL MODE FOR STABILITY
         self.tau = tau
@@ -326,17 +328,23 @@ class CriticMovingAverage(nn.Module):
     @torch.no_grad()
     def update(
         self,
-        value_net : CriticNetwork, # CRITIC NETWORK TO TRACK
+        critic : CriticNetwork, # CRITIC NETWORK TO TRACK
     ):
         """ EMA Update 2% towards Online Critic """
-        pass
+        
+        # ZIP TOGETHER TARGET NET AND ONLINE CRITIC PARAMETERS AND UPDATE IN PLACE
+        for parameters_emacritic, parameters_onlinecritic in zip(self.target_net.parameters(), critic.parameters()):
+            
+            # EMA UPDATE : target = (1 - tau) * target + tau * online
+            parameters_emacritic.data.lerp_(end = parameters_onlinecritic.data, weight = self.tau)
     
     def forward(
         self,
         feat : torch.Tensor,
     ) -> torch.Tensor:
         """ Forward Pass, returns stable value estimates for λ-return targets """
-        pass
+        
+        return self.target_net(feat) # (B,) SCALAR VALUE PREDICTION FROM EMA CRITIC
     
     
     
