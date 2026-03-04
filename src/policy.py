@@ -348,13 +348,25 @@ class CriticMovingAverage(nn.Module):
     
     
     
-
-def compute_lambda_returns():
+def compute_lambda_returns(
+    rewards : torch.Tensor,          # (B, H) PREDICTED  REWARD
+    values : torch.Tensor,           # (B, H) PREDICTED VALUE FROM CRITIC
+    continues : torch.Tensor,        # (B, H) PREDICTED CONTINUE LOGITS FROM CONTINUE NETWORK
+    last_value : torch.Tensor,       # (B,) VALUE PREDICTION FOR LAST STATE TO BOOTSTRAP FROM
+    gamma : float = 0.997,           # DISCOUNT FACTOR
+    lam : float = 0.95,              # LAMBDA FOR BLENDING TD AND MONTE CARLO TARGETS
+)-> torch.Tensor:
     """Backwards-recursive λ-return: blends 1-step TD (low variance) with Monte Carlo (low bias).
     G_t = r_t + Y * c_t * [(1-λ)*V(s_{t+1}) + λ*G_{t+1}]. 
     
-    λ=0.95 uses 95% of long-horizon info.
+    λ = How much you trust the critic vs the reward network and future returns.
+    
+    λ=0.95 uses 95% of long-horizon info. 
     Returns (B, H) targets that the critic is trained to predict."""
+    
+    pass
+    
+    
 
 class ReturnNormalizer:
     """Normalizes advantages by the 5th-95th percentile range of recent returns.
