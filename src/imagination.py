@@ -18,7 +18,15 @@ from world_model import HierarchicalWorldModel, hierarchical_causal_mask
 @dataclass
 class Trajectory:
     """ CONTAINER for 1 x imagination rollout batch."""
-    pass
+    tokens : torch.tensor           # (B, H, 3)         - PREDICTED HRVQ TOKENS (at each step)
+    actions : torch.tensor          # (B, H)            - ACTIONS TAKEN BY POLICY
+    log_probs : torch.tensor        # (B, H)            - LOG PROBS OF ACTIONS UNDER POLICY
+    feats : torch.tensor            # (B, H, feat_dim)  - DENSE FEATURES AT EACH STEP
+    values : torch.tensor           # (B, H)            - CRITIC PREDICTIONS AT EACH STEP
+    rewards : torch.tensor          # (B, H)            - REWARD PREDICTIONS AT EACH STEP
+    continues : torch.tensor        # (B, H)            - CONTINUE LOGITS AT EACH STEP
+    last_value : torch.tensor       # (B,)              - VALUE PREDICTION FOR LAST STATE TO BOOTSTRAP FROM
+    entropies : torch.tensor        # (B, H)            - ENTROPY OF POLICY AT EACH STEP
 
 
 class ImagineRollout:
