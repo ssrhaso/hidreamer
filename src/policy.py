@@ -434,5 +434,28 @@ class ReturnNormalizer:
         
         return x / scale
         
-def count_policy_params():
+def count_policy_params(
+    critic : CriticNetwork,
+    actor : ActorNetwork,
+    reward_net : RewardNetwork,
+    continue_net : ContinueNetwork,
+    feature_extractor : Optional[HierarchicalFeatureExtractor] = None,
+) -> dict:
     """Counts trainable parameters across all four networks. Sanity check: should be ~1.5-3M total"""
+    
+    counts = {
+        'actor' : sum(p.numel() for p in actor.parameters() if p.requires_grad),
+        'critic' : sum(p.numel() for p in critic.parameters() if p.requires_grad),
+        'reward_net' : sum(p.numel() for p in reward_net.parameters() if p.requires_grad),
+        'continue_net' : sum(p.numel() for p in continue_net.parameters() if p.requires_grad),
+    }
+    
+    # OPTIONAL FEATURE EXTRACTOR PARAM COUNT
+    if feature_extractor is not None:
+        counts['feature_extractor'] = sum(
+            p.numel() for p in feature_extractor.parameters() if p.requires_grad
+        )
+    
+    counts['total'] = sum(counts.values())
+    
+    return counts
