@@ -350,9 +350,9 @@ class CriticMovingAverage(nn.Module):
     
 def compute_lambda_returns(
     rewards : torch.Tensor,          # (B, H) PREDICTED  REWARD
-    values : torch.Tensor,           # (B, H) PREDICTED VALUE FROM CRITIC
+    values : torch.Tensor,           # (B, H) PREDICTED VALUE FROM EMA CRITIC
     continues : torch.Tensor,        # (B, H) PREDICTED CONTINUE LOGITS FROM CONTINUE NETWORK
-    last_value : torch.Tensor,       # (B,) VALUE PREDICTION FOR LAST STATE TO BOOTSTRAP FROM
+    last_value : torch.Tensor,       # (B,) VALUE PREDICTION FOR LAST STATE FROM EMA CRITIC 
     gamma : float = 0.997,           # DISCOUNT FACTOR
     lam : float = 0.95,              # LAMBDA FOR BLENDING TD AND MONTE CARLO TARGETS
 )-> torch.Tensor:
@@ -364,8 +364,27 @@ def compute_lambda_returns(
     λ=0.95 uses 95% of long-horizon info. 
     Returns (B, H) targets that the critic is trained to predict."""
     
-    pass
+    # (B, H) INITIALIZE TARGETS TENSOR
+    B , H = rewards.shape
+    targets = torch.zeros_like(rewards) 
     
+    # BOOTSTRAP LAST VALUE FOR G_{H-1}
+    next_val = last_value 
+    
+    for t in reversed(range(H)):
+        # DISCOUNT FACTOR (Continue Network)
+        discount = gamma * continues[:, t]
+        
+        # BLEND FUTURE VALUE WEIGHTED BY LAMBDA (0.05 vs 0.95)
+        blend = (1 - lam) * values[:, t] + lam * next_val
+        
+        # COMPUTE TARGET FOR THIS STEP
+        targets[:, t] = rewards[:, t] + discount * blend
+        
+        # UPDATE
+        next_val = targets[:, t] 
+    
+    return targets
     
 
 class ReturnNormalizer:
