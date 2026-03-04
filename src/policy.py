@@ -402,8 +402,8 @@ class ReturnNormalizer:
         self.decay = decay
         self.low_percentile = low_percentile
         self.high_percentile = high_percentile
-        self.low_ema = None
-        self.high_ema = None
+        self.low_ema = 0.0   # initialized on first update via cold-start branch
+        self.high_ema = 1.0  # default range of 1 until first real batch arrives
     
     @torch.no_grad()
     def update(
@@ -416,6 +416,12 @@ class ReturnNormalizer:
         
         low = torch.quantile(input = returns, q = self.low_percentile / 100).item()
         high = torch.quantile(input = returns, q = self.high_percentile / 100).item()
+        
+        # COLD START: seed EMAs from first real batch instead of multiplying None
+        if self.low_ema == 0.0 and self.high_ema == 1.0:
+            self.low_ema = low
+            self.high_ema = high
+            return
         
         # UPDATE LOW AND HIGH EMA
         self.low_ema = self.decay * self.low_ema + (1 - self.decay) * low
