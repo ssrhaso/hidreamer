@@ -392,6 +392,47 @@ class ReturnNormalizer:
     
     Robust under sparse rewards where std≈0 would cause division-by-zero explosion.
     EMA-tracked percentiles (decay=0.99) adapt smoothly as training progresses."""
-
+    
+    def __init__(
+        self,
+        decay : float = 0.99,               # EMA DECAY FOR TRACKING RETURN PERCENTILES
+        low_percentile : float = 5.0,       # LOW PERCENTILE FOR NORMALIZATION
+        high_percentile : float = 95.0,     # HIGH PERCENTILE FOR NORMALIZATION
+    ):
+        self.decay = decay
+        self.low_percentile = low_percentile
+        self.high_percentile = high_percentile
+        self.low_ema = None
+        self.high_ema = None
+    
+    @torch.no_grad()
+    def update(
+        self,
+        returns : torch.Tensor,             # (B,) RETURNS FROM RECENT BATCH
+    ):
+        """ Update EMA of return percentiles based on recent returns. 
+        (since Atari rewards can be sparse, 
+        we use percentiles instead of mean/std for robustness) """
+        
+        low = torch.quantile(input = returns, q = self.low_percentile / 100).item()
+        high = torch.quantile(input = returns, q = self.high_percentile / 100).item()
+        
+        # UPDATE LOW AND HIGH EMA
+        self.low_ema = self.decay * self.low_ema + (1 - self.decay) * low
+        self.high_ema = self.decay * self.high_ema + (1 - self.decay) * high
+        
+        
+    def normalize(
+        self,
+        x : torch.Tensor,                     # (B,) ADVANTAGES TO NORMALIZE
+    ) -> torch.Tensor:
+        """ Normalize x by the EMA-tracked percentile range of returns.
+        Land in a consistent, sensible magintude for stable PPO training. """
+        
+        # EMA RANGE , AVOID DIV BY ZERO
+        scale = max(self.high_ema - self.low_ema, 1.0) 
+        
+        return x / scale
+        
 def count_policy_params():
     """Counts trainable parameters across all four networks. Sanity check: should be ~1.5-3M total"""
