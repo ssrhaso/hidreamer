@@ -163,7 +163,21 @@ class ImagineRollout:
         return predicted_tokens
         
     
-    def rollout():
-        pass
+    def rollout(
+        self,
+        seed_tokens : torch.tensor,     # (B, T_seed, 3)    - input token context (HRVQ tokens)
+        seed_actions : torch.tensor,    # (B, T_seed)       - input action context
+    ) -> Trajectory:
+        """ RUN IMAGINATION ROLLOUT INSIDE WORLD MODEL. """     
         
+        ...
+        
+        for horizon in range(self.max_horizon):
+            pass
+        
+        with torch.no_grad():
+            pass
+        
+        return Trajectory(...)
+    
 
