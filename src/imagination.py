@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from typing import Optional
 import math
 
-from world_model import HierarchicalWorldModel, hierarchical_causal_mask
+from world_model import HierarchicalWorldModel
 
 @dataclass
 class Trajectory:
@@ -30,6 +30,57 @@ class Trajectory:
 
 
 class ImagineRollout:
-    """ Run Horizon-Step imagination inside frozen world model. """
-    pass
+    """ Run Horizon-Step imagination inside FROZEN world model. 
+    
+    1. Receive Seed Context (tokens, actions from replay buffer)
+    
+    2. For H steps:
+        a. Extract features from current tokens,
+        b. Sample action from policy
+        c. Run 3-sub-step cascade to predict [L0, L1, L2] 
+        d. Record (feat, action, log_prob, reward, continue, value)
+    
+    3. Return Trajectory (dataclass) for PPO training.
+    """
+    
+    def __init__(
+        self,
+        world_model : HierarchicalWorldModel,
+        feature_extractor,
+        
+        actor_network,  
+        critic_network,
+        reward_network,
+        continue_network,
+        max_horizon : int = 30, # UPPER BOUND (Cosine Schedule)
+        temperature : float = 1.0,
+        device : torch.device = None,
+    ):
+        
+        # 1. NEURAL NETWORKS
+        self.world_model = world_model
+        self.feature_extractor = feature_extractor
+        self.actor_network = actor_network
+        self.critic_network = critic_network
+        self.reward_network = reward_network
+        self.continue_network = continue_network
+        
+        # 2. HYPERPARAMETERS
+        self.max_horizon = max_horizon
+        self.temperature = temperature
+        self.device = device or torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        
+    
+    @torch.no_grad()
+    def _sample_token():
+        pass
+
+
+    @torch.no_grad()
+    def _cascade_predict_next():
+        pass
+    
+    def rollout():
+        pass
+        
 
