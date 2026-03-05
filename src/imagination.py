@@ -72,8 +72,26 @@ class ImagineRollout:
         
     
     @torch.no_grad()
-    def _sample_token():
-        pass
+    def _sample_token(
+        self,
+        logits : torch.tensor,   # (B, num_tokens)
+    ) -> torch.tensor:           # (B,) sampled token indices
+        """ STEP 1 : CASCADE PREDICTION OF L0 -> L1 -> L2 TOKENS.
+        
+        Receives raw scores from world model, samples a
+        Categorical Distribution over Codebook entries
+        """
+        
+        # GREEDY SAMPLING (eval / debug)
+        if self.temperature <= 0:
+            return logits.argmax(dim = -1)
+        
+        # STOCHASTIC SAMPLING
+        scaled_logits = logits / self.temperature                               # SCALE by temp
+        probabilities = F.softmax(scaled_logits, dim=-1)                        # CONVERT TO PROBABILITIES
+        distribution = torch.multinomial(input = probabilities, num_samples = 1).squeeze(-1)  
+        
+        return distribution
 
 
     @torch.no_grad()
