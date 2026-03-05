@@ -76,7 +76,7 @@ class ImagineRollout:
         self,
         logits : torch.tensor,   # (B, num_tokens)
     ) -> torch.tensor:           # (B,) sampled token indices
-        """ STEP 1 : CASCADE PREDICTION OF L0 -> L1 -> L2 TOKENS.
+        """ STEP A HELPER: SAMPLE OF L0 -> L1 -> L2 TOKENS.
         
         Receives raw scores from world model, samples a
         Categorical Distribution over Codebook entries
@@ -95,8 +95,73 @@ class ImagineRollout:
 
 
     @torch.no_grad()
-    def _cascade_predict_next():
-        pass
+    def _cascade_predict_next(
+        self,
+        tokens_context : torch.tensor,   # (B, timesteps, 3)    - input token context (HRVQ tokens)
+        actions_context : torch.tensor,   # (B, timesteps)       - input action context
+    ) -> torch.tensor:                   # (B, 3)               - predicted next [L0, L1, L2] tokens
+        """ STEP A: CASCADE PREDICTION OF L0 -> L1 -> L2 TOKENS.
+        
+        Predict next frame tokens via 3 forward passes through the world model
+        (With Hierarchical Flow)
+        
+        1. PREDICT L0 from Action Context
+        2. PREDICT L1 from L0
+        3. PREDICT L2 from L1 
+        """
+        
+        # INITIALISE CASCADE 
+        batch_items = tokens_context.size(0)
+        timesteps = tokens_context.size(1)
+        
+        """ 1. PREDICT L0 from ACTION CONTEXT """
+        # L0_{t + 1} = f(A pos't) (L0_{t + 1} is predicted from Action context at time t)
+        
+        logits_l0 = self.world_model(tokens_context, actions_context)
+        
+        # (B,) SAMPLED L0 tokens for next step
+        token_l0 = self._sample_token(logits = logits_l0[:, -1, :])  
+        
+        """ 2. PREDICT L1 from L0 """
+        # L1_{t + 1} = f(L0_{t + 1})
+        
+        # PLACE SAMPLED L0 TOKEN IN CONTEXT (Replace last L0 token with sampled)
+        # (B, 1, 3) - [0, 0, 0] placeholder for next step
+        next_partial = torch.zeros(batch_items, 1, 3, dtype = torch.long, device = self.device) 
+        
+        # INSERT SAMPLED L0 TOKEN INTO CONTEXT
+        next_partial[:, 0, :] = token_l0 
+        
+        # DUMMY ACTION CONTEXT (zeros) FOR L1 PREDICTION
+        # (B, 1) - dummy action for next step
+        dummy_action = actions_context[:, -1:] 
+        
+        # EXTEND BOTH CONTEXT BUFFERS by 1 STEP
+        tokens_context_extended = torch.cat(tensors = [tokens_context, next_partial], dim = 1)
+        actions_context_extended = torch.cat(tensors = [actions_context, dummy_action], dim = 1)
+        
+        # FORWARD PASS THROUGH WORLD MODEL TO PREDICT L1 LOGITS
+        _, logits_l1, _ = self.world_model(tokens_context_extended, actions_context_extended)
+        
+        # (B,) SAMPLED L1 TOKENS FOR NEXT STEP
+        token_l1 = self._sample_token(logits = logits_l1[:, -1, :])  
+        
+        """ 3. PREDICT L2 from L1 """
+        
+        # FILL IN L1 TOKENS IN CONTEXT
+        tokens_context_extended[:, -1, 1] = token_l1
+        
+        # FORWARD PASS THROUGH WORLD MODEL TO PREDICT L2 LOGITS
+        _, _, logits_l2 = self.world_model(tokens_context_extended, actions_context_extended)
+        
+        # (B,) SAMPLED L2 TOKENS FOR NEXT STEP
+        token_l2 = self._sample_token(logits = logits_l2[:, -1, :])
+        
+        """ CONCATENATE PREDICTED TOKENS INTO (B, 3) OUTPUT """
+        predicted_tokens = torch.stack(tensors = [token_l0, token_l1, token_l2], dim = -1)
+        
+        return predicted_tokens
+        
     
     def rollout():
         pass
