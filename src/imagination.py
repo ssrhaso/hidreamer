@@ -32,14 +32,9 @@ class Trajectory:
 class ImagineRollout:
     """ Run Horizon-Step imagination inside FROZEN world model. 
     
-    1. Receive Seed Context (tokens, actions from replay buffer)
-    
-    2. For H steps:
-        a. Extract features from current tokens,
-        b. Sample action from policy
-        c. Run 3-sub-step cascade to predict [L0, L1, L2] 
-        d. Record (feat, action, log_prob, reward, continue, value)
-    
+    Rollout():
+    1. CASCADE PREDICTION of L0 -> L1 -> L2 tokens at each step.
+    2. Extract FEATURES from predicted tokens, pass through PPO ACTOR to get ACTIONS and LOG PROBS.
     3. Return Trajectory (dataclass) for PPO training.
     """
     
@@ -117,7 +112,7 @@ class ImagineRollout:
         """ 1. PREDICT L0 from ACTION CONTEXT """
         # L0_{t + 1} = f(A pos't) (L0_{t + 1} is predicted from Action context at time t)
         
-        logits_l0 = self.world_model(tokens_context, actions_context)
+        logits_l0, _, _ = self.world_model(tokens_context, actions_context)
         
         # (B,) SAMPLED L0 tokens for next step
         token_l0 = self._sample_token(logits = logits_l0[:, -1, :])  
@@ -130,7 +125,7 @@ class ImagineRollout:
         next_partial = torch.zeros(batch_items, 1, 3, dtype = torch.long, device = self.device) 
         
         # INSERT SAMPLED L0 TOKEN INTO CONTEXT
-        next_partial[:, 0, :] = token_l0 
+        next_partial[:, 0, 0] = token_l0 
         
         # DUMMY ACTION CONTEXT (zeros) FOR L1 PREDICTION
         # (B, 1) - dummy action for next step
@@ -167,10 +162,38 @@ class ImagineRollout:
         self,
         seed_tokens : torch.tensor,     # (B, T_seed, 3)    - input token context (HRVQ tokens)
         seed_actions : torch.tensor,    # (B, T_seed)       - input action context
+        horizon : Optional[int] = None, # override horizon (scheduler)
     ) -> Trajectory:
-        """ RUN IMAGINATION ROLLOUT INSIDE WORLD MODEL. """     
+        """ RUN IMAGINATION ROLLOUT INSIDE WORLD MODEL. 
         
-        ...
+        SEED CONTEXT = Replay Buffer 
+        """     
+        
+        # INITIALISE CONTEXT BUFFERS WITH SEED CONTEXT
+        batch_size = seed_tokens.size(0)                          # batch size from seed context
+        t_seed = seed_tokens.size(1)                              # real frames in seed context
+        H = horizon if horizon is not None else self.max_horizon  # rollout horizon
+        
+        # VALIDATE sequence length
+        max_timesteps = self.world_model.config.max_seq_len // 4
+        assert t_seed + H <= max_timesteps, (
+            f"Seed ({t_seed}) + Horizon ({H}) = {t_seed + H} exceeds "
+            f"max timesteps ({max_timesteps})"
+        )
+        
+        """ Growing Context Buffers for Imagination Rollout """
+        tokens_context = seed_tokens.clone()    # (B, t_current, 3)
+        actions_context = seed_actions.clone()  # (B, t_current)
+        
+        """ Trajectory Storage (imagination rollout outputs)"""
+        trajectory_tokens       = torch.zeros(batch_size, H, 3, dtype = torch.long, device = self.device)
+        trajectory_actions      = torch.zeros(batch_size, H, dtype = torch.long, device = self.device)
+        trajectory_log_probs    = torch.zeros(batch_size, H, dtype = torch.float, device = self.device)
+        trajectory_entropies    = torch.zeros(batch_size, H, dtype = torch.float, device = self.device)
+        trajectory_feats        = []
+        trajectory_values       = torch.zeros(batch_size, H, dtype = torch.float, device = self.device)
+        trajectory_rewards      = torch.zeros(batch_size, H, dtype = torch.float, device = self.device)
+        trajectory_continues    = torch.zeros(batch_size, H, dtype = torch.float, device = self.device)
         
         for horizon in range(self.max_horizon):
             pass
