@@ -221,6 +221,10 @@ class ImagineRollout:
             """ 5. MAIN CASCADE PREDICT NEXT TOKENS (L0 -> L1 -> L2) - WM sees POLICY ACTIONS"""
             next_tokens = self._cascade_predict_next(tokens_context, actions_context)  # (B, 3) - predicted next tokens
             
+            """ 6. Extend CONTEXT BUFFERS with NEW TOKENS + Placeholder ACTION ZERO (To be filled)"""
+            tokens_context = torch.cat(tensors = [tokens_context, next_tokens.unsqueeze(1)], dim = 1)  # (B, t_current + 1, 3)
+            actions_context = torch.cat(tensors = [actions_context, torch.zeros(batch_size, 1, dtype = torch.long, device = self.device)], dim = 1)  # (B, t_current + 1)
+        
             pass
         
         with torch.no_grad():
