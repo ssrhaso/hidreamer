@@ -225,6 +225,16 @@ class ImagineRollout:
             tokens_context = torch.cat(tensors = [tokens_context, next_tokens.unsqueeze(1)], dim = 1)  # (B, t_current + 1, 3)
             actions_context = torch.cat(tensors = [actions_context, torch.zeros(batch_size, 1, dtype = torch.long, device = self.device)], dim = 1)  # (B, t_current + 1)
         
+            """ 7. Record TRAJECTORY DATA """
+            trajectory_tokens[:, h] = next_tokens
+            trajectory_actions[:, h] = action
+            trajectory_log_probs[:, h] = log_probabilities
+            trajectory_entropies[:, h] = entropy
+            trajectory_feats.append(feature)
+            trajectory_values[:, h] = value
+            trajectory_rewards[:, h] = reward
+            trajectory_continues[:, h] = continue_prob
+            
             pass
         
         with torch.no_grad():
