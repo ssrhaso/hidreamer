@@ -217,7 +217,10 @@ class ImagineRollout:
                 
             """ 4. Write POLICY ACTION into context - WM must see action before cascade """
             actions_context[:, -1] = action
-               
+            
+            """ 5. MAIN CASCADE PREDICT NEXT TOKENS (L0 -> L1 -> L2) - WM sees POLICY ACTIONS"""
+            next_tokens = self._cascade_predict_next(tokens_context, actions_context)  # (B, 3) - predicted next tokens
+            
             pass
         
         with torch.no_grad():
