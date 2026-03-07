@@ -185,7 +185,7 @@ class ImagineRollout:
         tokens_context = seed_tokens.clone()    # (B, t_current, 3)
         actions_context = seed_actions.clone()  # (B, t_current)
         
-        """ Trajectory Storage (imagination rollout outputs)"""
+        """ Trajectory Storage (only imagination rollout outputs)"""
         trajectory_tokens       = torch.zeros(batch_size, H, 3, dtype = torch.long, device = self.device)
         trajectory_actions      = torch.zeros(batch_size, H, dtype = torch.long, device = self.device)
         trajectory_log_probs    = torch.zeros(batch_size, H, dtype = torch.float, device = self.device)
@@ -195,7 +195,25 @@ class ImagineRollout:
         trajectory_rewards      = torch.zeros(batch_size, H, dtype = torch.float, device = self.device)
         trajectory_continues    = torch.zeros(batch_size, H, dtype = torch.float, device = self.device)
         
-        for horizon in range(self.max_horizon):
+        """ IMAGINATION ROLLOUT LOOP """
+        for h in range(H):
+            
+            """ 1. Get CURRENT FRAME (FEATURE EXTRACTOR) """
+            current_tokens = tokens_context[:, -1, :]            # (B, 3) - last step tokens in context
+            feature = self.feature_extractor(current_tokens)     # (B, feat_dim) - lookups for features
+            
+            """ 2. Get ACTION from ACTOR NETWORK (Distribution) """
+            distribution = self.actor_network(feature)           # (B, num_actions) - action logits ("odds for every action")
+            action = distribution.sample()                       # (B,) - sampled action indices    ("sample concrete decision from odds")
+            log_probabilities = distribution.log_prob(action)    # (B,) - log probs of sampled actions ("how likely was x decision?")
+            entropy = distribution.entropy()                     # (B,) - entropy of action distribution ("how uncertain was I?")
+            
+            """ 3. Auxilary Predictions from CRITIC, REWARD, CONTINUE NETWORKS """
+            with torch.no_grad():
+                value = self.critic_network(feature)             # (B,) - value prediction for current state
+                reward = self.reward_network(feature)            # (B,) - reward prediction for current state
+                continue_logit = self.continue_network(feature)  # (B,) - continue logit for current state
+                continue_prob = torch.sigmoid(continue_logit)    # (B,) - continue probability for current state
             pass
         
         with torch.no_grad():
