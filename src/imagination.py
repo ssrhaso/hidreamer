@@ -214,6 +214,10 @@ class ImagineRollout:
                 reward = self.reward_network(feature)            # (B,) - reward prediction for current state
                 continue_logit = self.continue_network(feature)  # (B,) - continue logit for current state
                 continue_prob = torch.sigmoid(continue_logit)    # (B,) - continue probability for current state
+                
+            """ 4. Write POLICY ACTION into context - WM must see action before cascade """
+            actions_context[:, -1] = action
+               
             pass
         
         with torch.no_grad():
