@@ -230,15 +230,18 @@ class ImagineRollout:
             trajectory_actions[:, h] = action
             trajectory_log_probs[:, h] = log_probabilities
             trajectory_entropies[:, h] = entropy
-            trajectory_feats.append(feature)
+            trajectory_features.append(feature)
             trajectory_values[:, h] = value
             trajectory_rewards[:, h] = reward
             trajectory_continues[:, h] = continue_prob
-            
-            pass
+
         
-        with torch.no_grad():
-            pass
+        with torch.no_grad():   
+            final_tokens = tokens_context[:, -1, :]
+            final_feature = self.feature_extractor(final_tokens)
+            last_value = self.critic_network(final_feature)         # (B,) - value prediction for last state (bootstrap)
+        
+        trajectory_features = torch.stack(trajectory_features, dim = 1)  # (B, H, feat_dim)
         
         return Trajectory(...)
     
