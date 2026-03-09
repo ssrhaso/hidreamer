@@ -243,6 +243,16 @@ class ImagineRollout:
         
         trajectory_features = torch.stack(trajectory_features, dim = 1)  # (B, H, feat_dim)
         
-        return Trajectory(...)
+        return Trajectory(
+            tokens = trajectory_tokens,
+            actions = trajectory_actions,
+            log_probs = trajectory_log_probs,
+            feats = trajectory_features,
+            values = trajectory_values,
+            rewards = trajectory_rewards,
+            continues = trajectory_continues,
+            last_value = last_value,
+            entropies = trajectory_entropies,
+        )
     
 
