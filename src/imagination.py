@@ -190,7 +190,7 @@ class ImagineRollout:
         trajectory_actions      = torch.zeros(batch_size, H, dtype = torch.long, device = self.device)
         trajectory_log_probs    = torch.zeros(batch_size, H, dtype = torch.float, device = self.device)
         trajectory_entropies    = torch.zeros(batch_size, H, dtype = torch.float, device = self.device)
-        trajectory_feats        = []
+        trajectory_features        = []
         trajectory_values       = torch.zeros(batch_size, H, dtype = torch.float, device = self.device)
         trajectory_rewards      = torch.zeros(batch_size, H, dtype = torch.float, device = self.device)
         trajectory_continues    = torch.zeros(batch_size, H, dtype = torch.float, device = self.device)
