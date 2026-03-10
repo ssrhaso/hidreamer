@@ -1,6 +1,8 @@
 """
 REPLAY BUFFER for real environment transitions 
 
+STORES HRVQ TOKENS 
+
 Used for:
     1. Training RewardNetwork and ContinueNetwork (supervised, real labels)
     2. Seeding imagination rollouts (context windows)
