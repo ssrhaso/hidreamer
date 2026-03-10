@@ -81,10 +81,10 @@ class TokenReplayBuffer:
         """Sample short context window for seeding imagination."""
         pass
     
-    def __len__(self):
-        pass
+    def __len__(self) -> int:
+        return self._size
     
-    def is_ready(self):
+    def is_ready(self): 
         """Check if buffer has enough data for sampling sequences."""
         pass
     
