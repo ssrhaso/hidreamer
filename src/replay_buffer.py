@@ -23,8 +23,24 @@ class TokenReplayBuffer:
     """
     
     def __init__(
+        self,
+        capacity : int = 100_000,
+        seq_len : int = 64,
+        device : torch.device = None,
     ):
-        pass
+        self.capacity = capacity
+        self.seq_len = seq_len
+        self.device = device or torch.device('cpu')
+        
+        # PRE ALLOCATE STORAGE (On CPU to save GPU memory)
+        self._tokens = torch.zeros(capacity, 3, dtype=torch.long)     # HRVQ [L0, L1, L2]
+        self._actions = torch.zeros(capacity, dtype=torch.long)       # Action indices
+        self._rewards = torch.zeros(capacity, dtype=torch.float32)    # Rewards
+        self._dones = torch.zeros(capacity, dtype=torch.bool)         # Done flags
+        
+        # Ring buffer pointers
+        self._ptr = 0
+        self._size = 0
     
     def push(
     ):
