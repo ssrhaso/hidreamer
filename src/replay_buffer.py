@@ -60,9 +60,16 @@ class TokenReplayBuffer:
         self._size = min(self._size + 1, self.capacity)
     
     def push_batch(
+        self,
+        tokens : torch.Tensor,   # (N, 3)
+        actions : torch.Tensor,  # (N,)
+        rewards : torch.Tensor,  # (N,)
+        dones : torch.Tensor,    # (N,)
     ):
         """Store batch of transitions."""
-        pass
+        N = tokens.size(0)
+        for i in range(N):
+            self.push(tokens[i], actions[i].item(), rewards[i].item(), dones[i].item())
     
     def sample(
     ):
