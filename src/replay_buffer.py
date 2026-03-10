@@ -84,9 +84,12 @@ class TokenReplayBuffer:
     def __len__(self) -> int:
         return self._size
     
-    def is_ready(self): 
+    def is_ready(
+        self,
+        min_size : int = 1000,
+    ) -> bool: 
         """Check if buffer has enough data for sampling sequences."""
-        pass
+        return self._size >= min_size
     
     @classmethod
     def from_numpy_data(  
