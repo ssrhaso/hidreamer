@@ -43,9 +43,21 @@ class TokenReplayBuffer:
         self._size = 0
     
     def push(
+        self,
+        tokens : torch.Tensor,   # (3,) int64
+        action : int,
+        reward : float,
+        done : bool,
     ):
         """Store single transition."""
-        pass
+        self._tokens[self._ptr] = tokens
+        self._actions[self._ptr] = action
+        self._rewards[self._ptr] = reward
+        self._dones[self._ptr] = done
+        
+        # Update ring buffer pointers
+        self._ptr = (self._ptr + 1) % self.capacity
+        self._size = min(self._size + 1, self.capacity)
     
     def push_batch(
     ):
