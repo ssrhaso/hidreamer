@@ -42,3 +42,35 @@ from policy import (
 from imagination import ImagineRollout, Trajectory
 from replay_buffer import TokenReplayBuffer
 
+
+class ActorCriticTrainer:
+    """ 
+    Full Training Loop for POLICY LEARNING
+    """
+    def __init__():
+        pass
+    
+    def _train_aux():
+        pass
+    
+    def _train_actor_critic():
+        pass
+    
+    @torch.no_grad()
+    def _encode_observation():
+        pass
+    
+    def collect_real_episode():
+        pass
+    
+    @torch.no_grad()
+    def evaluate():
+        pass
+    
+    """  MAIN TRAINING LOOP """
+    def train():
+        pass
+    
+    """ SAVE AND LOGGING """
+    def _save_checkpoint():
+        pass
