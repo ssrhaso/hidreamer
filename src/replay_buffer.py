@@ -72,9 +72,44 @@ class TokenReplayBuffer:
             self.push(tokens[i], actions[i].item(), rewards[i].item(), dones[i].item())
     
     def sample(
-    ):
+        self,
+        batch_size : int,
+    ) -> Dict[str, torch.Tensor]:
         """Sample random sequences of length seq_len from the buffer."""
-        pass
+        
+        assert self._size >= self.seq_len, "BUFFER TOO SMALL FOR SAMPLING SEQUENCES"
+        
+        # Find valid start indices (no wrapping around pointer, no crossing capacity)
+        max_start = self._size - self.seq_len
+        if max_start <= 0:
+            raise ValueError("Not enough data to sample sequences")
+        
+        start_indicies = torch.randint(0, max_start, (batch_size,))
+        
+        # LIST COMPREHENSION for GATHERING SEQUENCES
+        tokens_batch = torch.stack([
+            self._tokens[s:s + self.seq_len] for s in start_indicies
+        ]).to(self.device)  # (B, L, 3)
+        
+        actions_batch = torch.stack([
+            self._actions[s:s + self.seq_len] for s in start_indicies
+        ]).to(self.device)  # (B, L)
+        
+        rewards_batch = torch.stack([
+            self._rewards[s:s + self.seq_len] for s in start_indicies
+        ]).to(self.device)  # (B, L)
+        
+        dones_batch = torch.stack([
+            self._dones[s:s + self.seq_len] for s in start_indicies 
+        ]).to(self.device)  # (B, L)
+        
+        # RETURN AS DICTIONARY
+        return {
+            'tokens'    : tokens_batch,   # (B, L, 3)
+            'actions'   : actions_batch, # (B, L)
+            'rewards'   : rewards_batch, # (B, L)
+            'dones'     : dones_batch,     # (B, L)
+        }
 
     def sample_seed_context(
     ):
@@ -125,7 +160,7 @@ class TokenReplayBuffer:
         # PUSH ALL DATA INTO BUFFER
         N = min(len(tokens), len(actions), len(rewards), len(dones), capacity)
         
-        # CONVERT TO TENSORS AND PUSH
+        # CONVERT TO RAW INTEGER TENSORS AND PUSH
         buffer._tokens[:N] = torch.from_numpy(tokens[:N])
         buffer._actions[:N] = torch.from_numpy(actions[:N])
         buffer._rewards[:N] = torch.from_numpy(rewards[:N])
