@@ -155,8 +155,8 @@ class TokenReplayBuffer:
     @classmethod
     def from_numpy_data(  
         cls,
-        tokens_directory : str,
-        replay_directory : str,
+        tokens_dir       : str,
+        replay_dir       : str,
         game             : str,
         capacity         : int = 100_000,
         seq_len          : int = 64,
@@ -169,7 +169,7 @@ class TokenReplayBuffer:
         # LOAD HRVQ Tokens (Stacked L0, L1, L2)
         layers = []
         for layer in range(3):
-            path = f"{tokens_directory}/vq_tokens_ALE_{game}_layer{layer}.npy"
+            path = f"{tokens_dir}/vq_tokens_ALE_{game}_layer{layer}.npy"
             
             t = np.load(path).squeeze()  # (T,)
             layers.append(t)
@@ -177,7 +177,7 @@ class TokenReplayBuffer:
         tokens = np.stack(layers, axis=1).astype(np.int64)  # (T, 3)
         
         # LOAD Actions and Rewards from replay buffer
-        replay = np.load(f"{replay_directory}/replay_ALE_{game}.npz")
+        replay = np.load(f"{replay_dir}/replay_buffer_ALE_{game}.npz")
         
         actions = replay['actions'].astype(np.int64)    # (T,)
         rewards = replay['rewards'].astype(np.float32)  # (T,)
