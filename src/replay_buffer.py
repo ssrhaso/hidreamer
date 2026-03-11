@@ -25,8 +25,8 @@ class TokenReplayBuffer:
     def __init__(
         self,
         capacity : int = 100_000,
-        seq_len : int = 64,
-        device : torch.device = None,
+        seq_len  : int = 64,
+        device   : torch.device = None,
     ):
         self.capacity = capacity
         self.seq_len = seq_len
@@ -47,7 +47,7 @@ class TokenReplayBuffer:
         tokens : torch.Tensor,   # (3,) int64
         action : int,
         reward : float,
-        done : bool,
+        done   : bool,
     ):
         """Store single transition."""
         self._tokens[self._ptr] = tokens
@@ -61,10 +61,10 @@ class TokenReplayBuffer:
     
     def push_batch(
         self,
-        tokens : torch.Tensor,   # (N, 3)
+        tokens  : torch.Tensor,   # (N, 3)
         actions : torch.Tensor,  # (N,)
         rewards : torch.Tensor,  # (N,)
-        dones : torch.Tensor,    # (N,)
+        dones   : torch.Tensor,    # (N,)
     ):
         """Store batch of transitions."""
         N = tokens.size(0)
@@ -75,7 +75,11 @@ class TokenReplayBuffer:
         self,
         batch_size : int,
     ) -> Dict[str, torch.Tensor]:
-        """Sample random sequences of length seq_len from the buffer."""
+        """Sample random sequences of length seq_len from the buffer.
+        
+        FOR RewardNetwork and ContinueNetwork training 
+        (supervised learning on real data).
+        """
         
         assert self._size >= self.seq_len, "BUFFER TOO SMALL FOR SAMPLING SEQUENCES"
         
@@ -112,9 +116,31 @@ class TokenReplayBuffer:
         }
 
     def sample_seed_context(
-    ):
-        """Sample short context window for seeding imagination."""
-        pass
+        self,
+        batch_size  : int,
+        context_len : int = 16, # Explore 32, 64 (LONGER CONTEXTS)
+    ) -> Dict[str, torch.Tensor]:
+        """Sample short context window for seeding imagination.
+        (TOKENS + ACTIONS, NO REWARDS OR DONES)
+        
+        FOR Imagination Seeding (context windows for world model rollouts)
+        """
+        
+        max_start = self._size - context_len
+        if max_start <= 0:
+            max_start = 1
+        
+        start_indicies = torch.randint(0, max_start, (batch_size,))
+        
+        tokens = torch.stack([
+            self._tokens[s:s + context_len] for s in start_indicies
+        ]).to(self.device)  # (B, context_len, 3)
+        
+        actions = torch.stack([
+            self._actions[s:s + context_len] for s in start_indicies    
+        ]).to(self.device)  # (B, context_len)
+        
+        return {'tokens' : tokens, 'actions' : actions}
     
     def __len__(self) -> int:
         return self._size
