@@ -93,7 +93,46 @@ class TokenReplayBuffer:
     
     @classmethod
     def from_numpy_data(  
+        cls,
+        tokens_directory : str,
+        replay_directory : str,
+        game             : str,
+        capacity         : int = 100_000,
+        seq_len          : int = 64,
+        device           : torch.device = None,
     ):
-        """ Pre-populate buffer from numpy arrays (EXISTING PRE-EXTRACTED TOKEN FILES) """
-        pass
-    
+        """ CREATE and PREPOPULATE BUFFER from numpy arrays (EXISTING PRE-EXTRACTED TOKEN FILES) """
+        
+        buffer = cls(capacity = capacity, seq_len = seq_len, device = device)
+        
+        # LOAD HRVQ Tokens (Stacked L0, L1, L2)
+        layers = []
+        for layer in range(3):
+            path = f"{tokens_directory}/vq_tokens_ALE_{game}_layer{layer}.npy"
+            
+            t = np.load(path).squeeze()  # (T,)
+            layers.append(t)
+        
+        tokens = np.stack(layers, axis=1).astype(np.int64)  # (T, 3)
+        
+        # LOAD Actions and Rewards from replay buffer
+        replay = np.load(f"{replay_directory}/replay_ALE_{game}.npz")
+        
+        actions = replay['actions'].astype(np.int64)    # (T,)
+        rewards = replay['rewards'].astype(np.float32)  # (T,)
+        dones = replay['dones']                         # (T,)
+        
+        # PUSH ALL DATA INTO BUFFER
+        N = min(len(tokens), len(actions), len(rewards), len(dones), capacity)
+        
+        # CONVERT TO TENSORS AND PUSH
+        buffer._tokens[:N] = torch.from_numpy(tokens[:N])
+        buffer._actions[:N] = torch.from_numpy(actions[:N])
+        buffer._rewards[:N] = torch.from_numpy(rewards[:N])
+        buffer._dones[:N] = torch.from_numpy(dones[:N])
+        
+        buffer._size = N
+        buffer._ptr = N % capacity
+        
+        print(f"    Loaded {N} transitions for {game}")
+        return buffer
