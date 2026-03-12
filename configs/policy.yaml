@@ -12,7 +12,7 @@ policy:
   num_actions: 6             # Pong=6, Breakout=4, MsPacman=9
   
   # IMAGINATION
-  horizon_mode: "decay"      # SWAP THIS to compare: "flat" , "decay" , "bell"
+  horizon_mode: "decay"      # SWAP to compare: "flat" , "decay" , "bell"
                              #   flat:  H=30 always          (baseline)
                              #   decay: 30→5  cosine         (explore early, exploit late)
                              #   bell:  5→30→5 cosine        (ramp up then compress)
@@ -34,10 +34,12 @@ policy:
   lambda: 0.95               # λ for GAE-style returns (DreamerV3 default)
   
   # REGULARIZATION
-  entropy_scale: 3.0e-4      # DreamerV3: 3e-4 for discrete actions
-  ema_tau: 0.02              # Slow target EMA rate (DreamerV3)
-  unimix: 0.01               # Policy uniform mixture (DreamerV3: 1%)
-  
+  entropy_scale: 3.0e-4            # DreamerV3: 3e-4 for discrete actions
+  ema_tau: 0.02                    # Slow target EMA rate (DreamerV3)
+  unimix: 0.01                     # Policy uniform mixture (DreamerV3: 1%)
+  return_normalizer_decay: 0.99    # Decay for return normalizer(DreamerV3)
+  unimix: 0.01                     # Policy uniform mixture (DreamerV3: 1%)
+
   # TRAINING LOOP
   total_steps: 200000        # Total imagination training steps
   collect_every: 1           # Collect real step every N training steps

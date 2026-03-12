@@ -21,11 +21,13 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.optim import Adam
+from torch.distributions import Bernoulli
 
 import wandb
 
 from policy import (
     ActorNetwork,
+    CriticMovingAverage,
     CriticNetwork,
     RewardNetwork,
     ContinueNetwork,
@@ -89,14 +91,14 @@ class ActorCriticTrainer:
         policy_config = config['policy']
         
         self.actor_optimizer = Adam(
-            params = critic.parameters(),
-            lr = policy_config['critic_lr'],
+            params = policy.parameters(),
+            lr = policy_config['actor_lr'],
             eps = 1e-5,
         )
         
         self.critic_optimizer = Adam(
-            params = policy.parameters(),
-            lr = policy_config['actor_lr'],
+            params = critic.parameters(),
+            lr = policy_config['critic_lr'],
             eps = 1e-5,
         )
         
@@ -106,14 +108,23 @@ class ActorCriticTrainer:
             eps = 1e-5,
         )
         
-        
         # Slow Target for Critic (EMA)
+        self.slow_target = CriticMovingAverage(
+            critic = self.critic, 
+            tau = policy_config['critic_slow_target_tau']
+        )
         
         # Return Normalizer
+        self.return_normalizer = ReturnNormalizer(
+            decay = policy_config['return_normalizer_decay'],
+        )
         
         # Training State Variables
+        self.global_step = 0
+        self.episodes_collected = 0
         
-        # Continue Loss BCEWithLogitsLoss
+        # Continue Loss - Bernoulli Dist
+        self.Bernoulli = Bernoulli
         
         
     def _train_aux():
