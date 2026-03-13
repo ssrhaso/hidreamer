@@ -127,8 +127,69 @@ class ActorCriticTrainer:
         self.Bernoulli = Bernoulli
         
         
-    def _train_aux():
-        pass
+    def _train_aux(
+        self,
+        num_batches : int = 1
+    ) -> dict:
+        """
+        Train RewardNetwork and ContinueNetwork on REAL DATA 
+        (Replay buffer)
+        
+        Supervised labels, used during imagination to provide reward signal """
+        
+        # INIT
+        self.reward_network.train()
+        self.continue_network.train()
+        total_reward_loss = 0.0
+        total_continue_loss = 0.0
+        
+        # BATCH TRAINING LOOP
+        for _ in range(num_batches):
+            
+            # SAMPLE BATCH FROM REPLAY BUFFER
+            batch = self.replay_buffer.sample(
+                batch_size = self.config['policy']['aux_batch_size'],
+            )
+            
+            tokens = batch['tokens']         # (B, L, 3) (32, 64, 3)
+            rewards = batch['rewards']       # (B, L)    (32, 64)
+            dones = batch['dones']           # (B, L)    (32, 64)
+            
+            # FEATURE EXTRACTION (for each timestep)
+            B, L, _ = tokens.shape
+            tokens_flat = tokens.reshape(B * L, 3)           # (B*L, 3)           (2048, 3)
+            features = self.feature_extractor(tokens_flat)   # (B*L, feature_dim) (2048, 512)
+            
+            # CONTINUE NETWORK LOSS (Bernoulli) - Binary Classification 
+            continue_logits = self.continue_network(features)       # (B*L, 1) , raw logits
+            continue_target = (~dones).float().reshape(-1, 1)       # (B*L, 1) , 1 if not done, 0 if done
+            continue_loss = -self.Bernoulli(logits = continue_logits).log_prob(continue_target).mean()
+            continue_loss = continue_loss.mean()
+            
+            # REWARD NETWORK LOSS (MSE) - SymLog of rewards (range handling)
+            reward_prediction = self.reward_network(features) 
+            reward_target = symlog(rewards.reshape(-1))
+            reward_loss = F.mse_loss(input = reward_prediction, target = reward_target)
+            
+            # BACKPROP AND OPTIMIZE
+            aux_loss = reward_loss + continue_loss
+            self.aux_optimizer.zero_grad()
+            aux_loss.backward()
+            
+            torch.nn.utils.clip_grad_norm_(
+                list(self.reward_network.parameters()) + list(self.continue_network.parameters()),
+                max_norm = self.config['policy']['aux_max_norm'],
+            )
+            self.aux_optimizer.step()
+            total_reward_loss += reward_loss.item()
+            total_continue_loss += continue_loss.item()
+            
+        # RETURNS
+        return {
+            'aux/reward_loss': total_reward_loss / num_batches,
+            'aux/continue_loss': total_continue_loss / num_batches,
+        }
+        
     
     def _train_actor_critic():
         pass
