@@ -28,6 +28,8 @@ policy:
   actor_lr: 3.0e-5           # DreamerV3 actor LR
   critic_lr: 3.0e-5          # DreamerV3 critic LR (same as actor in V3)
   aux_lr: 1.0e-4             # Reward/continue predictor LR (higher — supervised)
+  aux_batch_size: 32         # Batch size for auxiliary supervised training (real data)
+  aux_max_norm : 100.0       # Gradient clipping for auxiliary losses (large to avoid instability)
   
   # λ-Returns (DreamerV3 Eq. 7) 
   gamma: 0.997               # Discount factor (DreamerV3 default)
@@ -36,7 +38,6 @@ policy:
   # REGULARIZATION
   entropy_scale: 3.0e-4            # DreamerV3: 3e-4 for discrete actions
   ema_tau: 0.02                    # Slow target EMA rate (DreamerV3)
-  unimix: 0.01                     # Policy uniform mixture (DreamerV3: 1%)
   return_normalizer_decay: 0.99    # Decay for return normalizer(DreamerV3)
   unimix: 0.01                     # Policy uniform mixture (DreamerV3: 1%)
 
