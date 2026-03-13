@@ -201,21 +201,53 @@ class ActorCriticTrainer:
         ACTOR:  Reinforce with λ-return advantages + entropy regularisation
         CRITIC: MSE on symlog λ-return targets (vs slow target)
         """
-        # INIT
+        # INIT - Load config scalars
+        policy_config = self.config['policy']
+        gamma = policy_config['gamma']
+        lam = policy_config['lambda']
+        entropy_scale = policy_config['entropy_scale']
         
         # COMPUTE λ RETURNS 
         with torch.no_grad():
-            pass
+            
+            # USE Slow Target for stable value estimates
+            slow_values = torch.zeros_like(trajectory.values)                  # (B, H) empty
+
+            for h in range(trajectory.feats.size(1)):                          # loop over horizon
+                slow_values[:, h] = self.slow_target(trajectory.feats[:, h])   # fill column h , slice to (B, 1152)
+            slow_last = self.slow_target(
+                self.feature_extractor(trajectory.tokens[:, -1])
+            ) # (B, H) one value per step
         
         # CONVERT REWARDS from SymLog space -> real space for λ returns
+        rewards_real = symexp(trajectory.rewards)  # (B, H)
         
         # Update RETURN NORMALIZER
+        lambda_returns = compute_lambda_returns(
+            rewards = rewards_real,
+            values = slow_values,
+            last_value = slow_last,
+            gamma = gamma,
+            lam = lam,
+        ) # (B, H)
         
         # CRITIC Update
+        self.return_normalizer.update(lambda_returns)
+        self.critic.train()
         
         # RECOMPUTE Values 
+        values = torch.zeros_like(trajectory.values)                       # (B, H) empty
+        for h in range(trajectory.feats.size(1)):                          # loop over horizon
+            values[:, h] = self.critic(trajectory.feats[:, h].detach())    # fill column h , slice to (B, 1152)
         
         # CRITIC Loss
+        value_targets = symlog(lambda_returns)  
+        critic_loss = 0.5 * F.mse_loss(input = values, target = value_targets)
+        
+        self.critic_optimizer.zero_grad()
+        critic_loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.critic.parameters(), max_norm = self.config['policy']['critic_max_norm'])
+        self.critic_optimizer.step()
         
         # ACTOR UPDATE
         

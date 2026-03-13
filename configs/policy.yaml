@@ -25,12 +25,15 @@ policy:
   batch_size: 16             # Imagination batch size (limited by T4 VRAM)
   
   # OPTIMIZATION
-  actor_lr: 3.0e-5           # DreamerV3 actor LR
-  critic_lr: 3.0e-5          # DreamerV3 critic LR (same as actor in V3)
-  aux_lr: 1.0e-4             # Reward/continue predictor LR (higher — supervised)
-  aux_batch_size: 32         # Batch size for auxiliary supervised training (real data)
-  aux_max_norm : 100.0       # Gradient clipping for auxiliary losses (large to avoid instability)
-  
+  actor_lr: 3.0e-5              # DreamerV3 actor LR
+  critic_lr: 3.0e-5             # DreamerV3 critic LR (same as actor in V3)
+  aux_lr: 1.0e-4                # Reward/continue predictor LR (higher — supervised)
+  aux_batch_size: 32            # Batch size for auxiliary supervised training (real data)
+  aux_max_norm : 100.0          # Gradient clipping for auxiliary losses (large to avoid instability)
+  actor_max_norm : 100.0        # Gradient clipping for actor (large to avoid instability)
+  critic_max_norm : 100.0       # Gradient clipping for critic (large to avoid instability)
+  critic_slow_target_tau: 0.02  # EMA rate for slow critic target (DreamerV3)
+
   # λ-Returns (DreamerV3 Eq. 7) 
   gamma: 0.997               # Discount factor (DreamerV3 default)
   lambda: 0.95               # λ for GAE-style returns (DreamerV3 default)
