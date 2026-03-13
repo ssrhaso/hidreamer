@@ -158,12 +158,14 @@ class ActorCriticTrainer:
             # FEATURE EXTRACTION (for each timestep)
             B, L, _ = tokens.shape
             tokens_flat = tokens.reshape(B * L, 3)           # (B*L, 3)           (2048, 3)
-            features = self.feature_extractor(tokens_flat)   # (B*L, feature_dim) (2048, 512)
+            
+            with torch.no_grad():
+                features = self.feature_extractor(tokens_flat)   # (B*L, feature_dim) (2048, 512)
             
             # CONTINUE NETWORK LOSS (Bernoulli) - Binary Classification 
             continue_logits = self.continue_network(features)       # (B*L, 1) , raw logits
-            continue_target = (~dones).float().reshape(-1, 1)       # (B*L, 1) , 1 if not done, 0 if done
-            continue_loss = -self.Bernoulli(logits = continue_logits).log_prob(continue_target).mean()
+            continue_target = (~dones).float().reshape(-1)       # (2048, ) , 1 if not done, 0 if done
+            continue_loss = -self.Bernoulli(logits = continue_logits).log_prob(continue_target)
             continue_loss = continue_loss.mean()
             
             # REWARD NETWORK LOSS (MSE) - SymLog of rewards (range handling)
@@ -226,6 +228,7 @@ class ActorCriticTrainer:
         lambda_returns = compute_lambda_returns(
             rewards = rewards_real,
             values = slow_values,
+            continues = trajectory.continues,
             last_value = slow_last,
             gamma = gamma,
             lam = lam,
@@ -241,7 +244,7 @@ class ActorCriticTrainer:
             values[:, h] = self.critic(trajectory.feats[:, h].detach())    # fill column h , slice to (B, 1152)
         
         # CRITIC Loss
-        value_targets = symlog(lambda_returns)  
+        value_targets = symlog(lambda_returns).detach()
         critic_loss = 0.5 * F.mse_loss(input = values, target = value_targets)
         
         self.critic_optimizer.zero_grad()
@@ -249,14 +252,44 @@ class ActorCriticTrainer:
         torch.nn.utils.clip_grad_norm_(self.critic.parameters(), max_norm = self.config['policy']['critic_max_norm'])
         self.critic_optimizer.step()
         
-        # ACTOR UPDATE
+        # UPDATE SLOW TARGET
+        self.slow_target.update(self.critic)
         
-        # RECINFORCE Loss
+        # ACTOR UPDATE
+        self.policy.train()
+        
+        with torch.no_grad():
+            advantages = lambda_returns - slow_values
+            advantages = self.return_normalizer.normalize(advantages)
+            
+        # REINFORCE Loss
+        actor_loss = -(trajectory.log_probs * advantages.detach()).mean()
         
         # ENTROPY REGULARIZATION 
+        entropy_loss = -trajectory.entropies.mean()
+        
+        total_actor_loss = actor_loss + entropy_scale * entropy_loss
+        
+        # BACKPROP AND OPTIMIZE
+        self.actor_optimizer.zero_grad()
+        total_actor_loss.backward()
+        torch.nn.utils.clip_grad_norm_(
+            list(self.policy.parameters()) + list(self.feature_extractor.parameters()), 
+            max_norm = self.config['policy']['actor_max_norm']
+        )
+        self.actor_optimizer.step()
         
         # RETURNS
-    
+        return {
+            'actor/loss': actor_loss.item(),
+            'actor/entropy': trajectory.entropies.mean().item(),
+            'critic/loss': critic_loss.item(),
+            'critic/value_mean': values.mean().item(),
+            'returns/mean': lambda_returns.mean().item(),
+            'returns/std': lambda_returns.std().item(),
+            'advantages/mean': advantages.mean().item(),
+        }
+        
     @torch.no_grad()
     def _encode_observation():
         pass
@@ -268,10 +301,12 @@ class ActorCriticTrainer:
     def evaluate():
         pass
     
-    """  MAIN TRAINING LOOP """
+    
     def train():
+        """  MAIN TRAINING LOOP """
         pass
     
-    """ SAVE AND LOGGING """
+    
     def _save_checkpoint():
+        """ SAVE AND LOGGING """
         pass
