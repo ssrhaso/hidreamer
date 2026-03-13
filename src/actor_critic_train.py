@@ -191,8 +191,39 @@ class ActorCriticTrainer:
         }
         
     
-    def _train_actor_critic():
-        pass
+    def _train_actor_critic(
+        self,
+        trajectory : Trajectory
+    ) -> dict :
+        """ 
+        Train ActorNetwork and CriticNetwork on IMAGINED TRAJECTORY from world model.
+        
+        ACTOR:  Reinforce with λ-return advantages + entropy regularisation
+        CRITIC: MSE on symlog λ-return targets (vs slow target)
+        """
+        # INIT
+        
+        # COMPUTE λ RETURNS 
+        with torch.no_grad():
+            pass
+        
+        # CONVERT REWARDS from SymLog space -> real space for λ returns
+        
+        # Update RETURN NORMALIZER
+        
+        # CRITIC Update
+        
+        # RECOMPUTE Values 
+        
+        # CRITIC Loss
+        
+        # ACTOR UPDATE
+        
+        # RECINFORCE Loss
+        
+        # ENTROPY REGULARIZATION 
+        
+        # RETURNS
     
     @torch.no_grad()
     def _encode_observation():
