@@ -326,8 +326,21 @@ class ActorCriticTrainer:
 
         return tokens
     
-    def collect_real_episode():
-        pass
+    def collect_real_episode(
+        self
+    ) -> dict:
+        """
+        Collect one full episode of real environment interaction using current policy.
+        Push transition to replay buffer.
+        """
+        
+        # ERROR HANDLING
+        
+        # RESET ENV 
+        
+        # INTERACTION LOOP
+        
+        return
     
     @torch.no_grad()
     def evaluate():
