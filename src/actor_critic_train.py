@@ -301,11 +301,30 @@ class ActorCriticTrainer:
         """
         
         # NORMALISE 
-        
-        # ENCODE
+        frame = obs.astype(np.float32)            # uint8 -> float32
+        frame = frame / 255.0                     # normalise to [0, 1]
+        frame = torch.from_numpy(frame)           # numpy array -> torch tensor (C, H, W)
+        frame = frame.unsqueeze(0)                # add batch dimension (1, C, H, W)
+        frame = frame.to(self.device)             # move to gpu -> (1, 4, 84, 84) fp32
+    
+        # ENCODER (CNN feature extractor)
+        embedding = self.encoder(frame)           # -> (1, 384) fp32
         
         # HRVQ ENCODE (Tokenization + Quantization)
-        pass
+        embedding = embedding.unsqueeze(1).unsqueeze(2)   # Reshape -> (1, 1, 1, 384) for HRVQ
+        token_list = self.hrvq_tokenizer.encode(embedding)       # HRVQ Tokenizer -> 3 codebook indices - L0, L1, L2 
+        
+        # Remove extra dimensions and concatenate tokens -> (1, 3)
+        
+        token_0 = token_list[0].squeeze(2).squeeze(1).squeeze(0)   # (1, 1, 1) -> scalar tensor 
+        token_1 = token_list[1].squeeze(2).squeeze(1).squeeze(0)   # (1, 1, 1) -> scalar tensor
+        token_2 = token_list[2].squeeze(2).squeeze(1).squeeze(0)   # (1, 1, 1) -> scalar tensor
+        
+        # CONCATENATE TOKENS INTO SINGLE TENSOR
+        tokens = torch.stack(tensors = [token_0, token_1, token_2], dim = -1)  # (3,)
+    
+
+        return tokens
     
     def collect_real_episode():
         pass
