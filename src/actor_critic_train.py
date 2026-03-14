@@ -291,7 +291,20 @@ class ActorCriticTrainer:
         }
         
     @torch.no_grad()
-    def _encode_observation():
+    def _encode_observation(
+        self,
+        obs : np.ndarray
+    )-> torch.Tensor:
+        """
+        Encode raw Atari frame to HRVQ Tokens 
+        (using pretrained CNN encoder and HRVQ tokenizer)
+        """
+        
+        # NORMALISE 
+        
+        # ENCODE
+        
+        # HRVQ ENCODE (Tokenization + Quantization)
         pass
     
     def collect_real_episode():
