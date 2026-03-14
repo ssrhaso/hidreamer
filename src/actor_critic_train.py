@@ -335,12 +335,52 @@ class ActorCriticTrainer:
         """
         
         # ERROR HANDLING
+        if self.env is None:
+            raise ValueError("Environment not provided for real episode collection.")
         
-        # RESET ENV 
+        # RESET ENV (Initial Obs)
+        obs , _ = self.env.reset()  # (4, 84, 84) uint8 
+        episode_return = 0.0
+        episode_length = 0
+        done = False
         
         # INTERACTION LOOP
+        while not done:
+            
+            
+            # POLICY ACTION SELECTION
+            with torch.no_grad():
+                # ENCODE OBSERVATION TO HRVQ TOKENS (28224 raw values -> 3 discrete tokens)
+                tokens = self._encode_observation(obs)                      # (3, ) [L0, L1, L2] 
+            
+                # DENSE FLOAT VECTOR (3 tokens -> 512 dim feature vector) for policy input
+                features = self.feature_extractor(tokens.unsqueeze(0))      # (1, feature_dim ) 
+            
+                distribution = self.policy(features)    #  logits
+                action = distribution.sample().item()   #  sampled action index
+            
+            # STEP ENV
+            next_obs, reward, terminated, truncated, _ = self.env.step(action)
+            done = terminated or truncated
+            
+            # PUSH TO BUFFER
+            self.replay_buffer.push(
+                tokens = tokens.cpu(),
+                action = action,
+                reward = reward, 
+                done = done,
+            )
+            
+            obs = next_obs
+            episode_return += reward
+            episode_length += 1
         
-        return
+        self.episodes_collected += 1
+        
+        return {
+            'episode_return': episode_return,
+            'episode_length': episode_length,
+        }
     
     @torch.no_grad()
     def evaluate():
