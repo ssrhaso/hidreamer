@@ -439,8 +439,31 @@ class ActorCriticTrainer:
             
     
     
-    def train():
+    def train(
+        self,
+        total_steps : int = 200_000,
+        use_wandb : bool = True,
+        save_directory : str = 'checkpoints/policy',
+        eval_interval : int = 10_000,
+        log_interval : int = 100,
+        prefill_steps : int = 0,
+        offline_mode : bool = True,
+    ):
         """  MAIN TRAINING LOOP """
+        
+        """ SETUP """
+        
+        """ WARMUP """
+        
+        """ COLLECT REAL DATA """        
+        
+        """ Train AUX Networks (REAL DATA)"""
+        
+        """ Imagine Trajectory (WORLD MODEL latent rollout)  """
+        
+        """ Train ACTOR CRITIC (IMAGINED DATA) """
+        
+        
         pass
     
     
