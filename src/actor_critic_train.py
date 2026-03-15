@@ -459,7 +459,7 @@ class ActorCriticTrainer:
                 param.requires_grad = False
         
         os.makedirs(name = save_directory, exist_ok = True)
-        policy = self.config['policy']
+        policy_config = self.config['policy']
         
         # WANDB
         if use_wandb:
@@ -480,8 +480,8 @@ class ActorCriticTrainer:
         print(f"STARTING POLICY TRAINING")
         print(f"  Parameters: {count_policy_params(self.policy)}")
         print(f"  Total steps: {total_steps}")
-        print(f"  Horizon schedule: mode={policy.get('horizon_mode', 'decay')}  H=[{policy.get('min_horizon', 5)}, {policy.get('max_horizon', 30)}]")
-        print(f"  Batch size: {policy['batch_size']}")
+        print(f"  Horizon schedule: mode={policy_config.get('horizon_mode', 'decay')}  H=[{policy_config.get('min_horizon', 5)}, {policy_config.get('max_horizon', 30)}]")
+        print(f"  Batch size: {policy_config['batch_size']}")
         print(f"  Offline mode: {offline_mode}")
         print(f"  Buffer size: {len(self.replay_buffer)}")
         
@@ -489,9 +489,9 @@ class ActorCriticTrainer:
         best_eval_return = -float('inf')
         
         # HORIZON SCHEDULE PARAMETERS 
-        horizon_max = policy.get('max_horizon', 30)
-        horizon_min = policy.get('min_horizon', 5)
-        horizon_mode = policy.get('horizon_mode', 'decay')      # 'flat', 'decay', 'bell'
+        horizon_max = policy_config.get('max_horizon', 30)
+        horizon_min = policy_config.get('min_horizon', 5)
+        horizon_mode = policy_config.get('horizon_mode', 'decay')      # 'flat', 'decay', 'bell'
         
         """ MAIN LOOP """
         for step in range(total_steps):
@@ -507,7 +507,7 @@ class ActorCriticTrainer:
             )
             
             """ Collect Real Data """        
-            if not offline_mode and step % policy.get('collect_interval', 1) == 0:
+            if not offline_mode and step % policy_config.get('collect_interval', 1) == 0:
                 episode_info = self.collect_real_episode()
                 
                 if use_wandb and episode_info:
@@ -518,13 +518,13 @@ class ActorCriticTrainer:
             
             """ Train Aux Networks (REAL DATA)"""
             aux_metrics = self._train_aux(
-                num_batches = policy.get('aux_batches', 1),
+                num_batches = policy_config.get('aux_batches', 1),
             )
             
             """ Imagination Rollout (WORLD MODEL latent rollout)  """
             seed_context = self.replay_buffer.sample_seed_context(
-                batch_size = policy['batch_size'],
-                context_len = policy['seed_context_len']
+                batch_size = policy_config['batch_size'],
+                context_len = policy_config['seed_context_len']
             )
 
             imagined_trajectory = self.imagination.rollout(
