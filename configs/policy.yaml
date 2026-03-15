@@ -46,10 +46,10 @@ policy:
 
   # TRAINING LOOP
   total_steps: 200000        # Total imagination training steps
-  collect_every: 1           # Collect real step every N training steps
+  collect_interval: 1        # Collect real step every N training steps
   aux_batches: 1             # Auxiliary training batches per step
   eval_every: 10000          # Evaluate every N steps
-  log_every: 100             # Log every N steps
+  log_interval: 100          # Log every N steps
   prefill_steps: 1000        # Random steps before training starts
   
   # OFFLINE MODE
