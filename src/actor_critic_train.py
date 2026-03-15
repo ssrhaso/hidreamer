@@ -383,8 +383,60 @@ class ActorCriticTrainer:
         }
     
     @torch.no_grad()
-    def evaluate():
-        pass
+    def evaluate(
+        self,
+        num_episodes : int = 5,
+    ) -> dict:
+        """ Evaluate policy on real environment """
+        
+        # ERROR HANDLING
+        if self.env is None:
+            return {}
+        
+        # EVAL LOOP - Setup
+        self.policy.eval()
+        returns = []
+        lengths = []
+        
+        # EVAL LOOP
+        for _ in range(num_episodes):
+            # RESET ENV (Initial Obs)
+            obs, _ = self.env.reset()  
+            
+            # INIT EPISODE VARIABLES
+            episode_return = 0.0
+            episode_length = 0
+            done = False
+            
+            # INTERACTION LOOP
+            while not done:
+                # ENCODE OBSERVATION TO HRVQ TOKENS (28224 raw values -> 3 discrete tokens)
+                tokens = self._encode_observation(obs)                      # (3, ) [L0, L1, L2] 
+            
+                # DENSE FLOAT VECTOR (3 tokens -> 512 dim feature vector) for policy input
+                features = self.feature_extractor(tokens.unsqueeze(0))      # (1, feature_dim ) 
+                
+                # GREEDY ACTION SELECTION (for evaluation)
+                distribution = self.policy(features)                  #  prob logits
+                action = distribution.probs.argmax(dim = -1).item()   #  greedily take highest prob
+                
+                # STEP ENV and ACCUMULATE
+                next_obs, reward, terminated, truncated, _ = self.env.step(action)
+                done = terminated or truncated
+                episode_return += reward
+                episode_length += 1
+            
+            returns.append(episode_return)
+            lengths.append(episode_length)
+        
+        self.policy.train()
+        return {
+            'eval/return_mean': np.mean(returns),
+            'eval/return_std': np.std(returns),
+            'eval/length_mean': np.mean(lengths),
+        }
+                
+            
     
     
     def train():
