@@ -453,17 +453,59 @@ class ActorCriticTrainer:
         
         """ SETUP """
         
-        """ WARMUP """
+        os.makedirs(name = save_directory, exist_ok = True)
+        policy = self.config['policy']
         
-        """ COLLECT REAL DATA """        
+        # WANDB
+        if use_wandb:
+            wandb.init(
+                project = "hi-dreamer-policy",
+                config = self.config,
+                resume = "allow",
+            )
         
-        """ Train AUX Networks (REAL DATA)"""
+        """ PREFILL REPLAY BUFFER """
         
-        """ Imagine Trajectory (WORLD MODEL latent rollout)  """
+        if not offline_mode and prefill_steps > 0:
+            print(f"Prefilling replay buffer with {prefill_steps} random steps...")
+            while len(self.replay_buffer) < prefill_steps:
+                self.collect_episode()
+            print(f"  Buffer size: {len(self.replay_buffer)}")
         
-        """ Train ACTOR CRITIC (IMAGINED DATA) """
+        print(f"STARTING POLICY TRAINING")
+        print(f"  Parameters: {count_policy_params(self.policy)}")
+        print(f"  Total steps: {total_steps}")
+        print(f"  Horizon schedule: mode={pc.get('horizon_mode', 'decay')}  H=[{pc.get('min_horizon', 5)}, {pc.get('max_horizon', 30)}]")
+        print(f"  Batch size: {pc['batch_size']}")
+        print(f"  Offline mode: {offline_mode}")
+        print(f"  Buffer size: {len(self.replay_buffer)}")
         
+        start_Time = time.time()
+        best_eval_return = -float('inf')
         
+        # HORIZON SCHEDULE PARAMETERS 
+        horizon_max = policy.get('max_horizon', 30)
+        horizon_min = policy.get('min_horizon', 5)
+        horizon_mode = policy.get('horizon_mode', 'decay')      # 'flat', 'decay', 'bell'
+        
+        """ MAIN LOOP """
+        for step in range(total_steps):
+            
+            """ Collect Real Data """        
+            
+            """ Train Aux Networks (REAL DATA)"""
+            
+            """ Imagination Rollout (WORLD MODEL latent rollout)  """
+            
+            """ Train Actor Critic Networks (IMAGINED DATA) """
+            
+            """ Logging """
+        
+            """ Evaluation """
+            
+            """ Checkpointing """
+        
+        """ Final Save """
         pass
     
     
