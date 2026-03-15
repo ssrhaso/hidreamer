@@ -444,6 +444,36 @@ class ActorCriticTrainer:
         pass
     
     
-    def _save_checkpoint():
+    def _save_checkpoint(
+        self,
+        path : str,
+        step : int,
+        best_return : float,
+    ):
         """ SAVE AND LOGGING """
-        pass
+        torch.save({
+            'step': step,
+            'best_return': best_return,
+            'game': self.config.get('game', 'unknown'),   
+            'policy_state_dict': self.policy.state_dict(),
+            'critic_state_dict': self.critic.state_dict(),
+            'reward_net_state_dict': self.reward_network.state_dict(),
+            'continue_net_state_dict': self.continue_network.state_dict(),
+            'feature_extractor_state_dict': self.feature_extractor.state_dict(),
+            'actor_optim_state_dict': self.actor_optimizer.state_dict(),
+            'critic_optim_state_dict': self.critic_optimizer.state_dict(),
+            'aux_optim_state_dict': self.aux_optimizer.state_dict(),
+        }, path)
+        
+        
+        
+        # Upload to W&B Artifacts
+        if wandb.run is not None:
+            artifact = wandb.Artifact(
+                name=f"hidreamer-actor-critic-{self.config.get('game', 'unknown')}-step{step}",
+                type="model",
+                metadata={'step': step, 'best_return': best_return},
+            )
+            artifact.add_file(path)
+            wandb.log_artifact(artifact)
+        print(f"    Saved Checkpoint: {path}")
