@@ -163,13 +163,13 @@ class ActorCriticTrainer:
                 features = self.feature_extractor(tokens_flat)   # (B*L, feature_dim) (2048, 512)
             
             # CONTINUE NETWORK LOSS (Bernoulli) - Binary Classification 
-            continue_logits = self.continue_network(features)       # (B*L, 1) , raw logits
+            continue_logits = self.continue_network(features).squeeze(-1)       # (B*L) , raw logits
             continue_target = (~dones).float().reshape(-1)       # (2048, ) , 1 if not done, 0 if done
             continue_loss = -self.Bernoulli(logits = continue_logits).log_prob(continue_target)
             continue_loss = continue_loss.mean()
             
             # REWARD NETWORK LOSS (MSE) - SymLog of rewards (range handling)
-            reward_prediction = self.reward_network(features) 
+            reward_prediction = self.reward_network(features).squeeze(-1)
             reward_target = symlog(rewards.reshape(-1))
             reward_loss = F.mse_loss(input = reward_prediction, target = reward_target)
             
@@ -219,7 +219,7 @@ class ActorCriticTrainer:
                 slow_values[:, h] = self.slow_target(trajectory.feats[:, h])   # fill column h , slice to (B, 1152)
             slow_last = self.slow_target(
                 self.feature_extractor(trajectory.tokens[:, -1])
-            ) # (B, H) one value per step
+            ) 
         
         # CONVERT REWARDS from SymLog space -> real space for λ returns
         rewards_real = symexp(trajectory.rewards)  # (B, H)
@@ -452,6 +452,11 @@ class ActorCriticTrainer:
         """  MAIN TRAINING LOOP """
         
         """ SETUP """
+        # FREEZE MODELS
+        for model in [self.world_model, self.hrvq_tokenizer, self.encoder]:
+            model.eval()
+            for param in model.parameters():
+                param.requires_grad = False
         
         os.makedirs(name = save_directory, exist_ok = True)
         policy = self.config['policy']
@@ -469,18 +474,18 @@ class ActorCriticTrainer:
         if not offline_mode and prefill_steps > 0:
             print(f"Prefilling replay buffer with {prefill_steps} random steps...")
             while len(self.replay_buffer) < prefill_steps:
-                self.collect_episode()
+                self.collect_real_episode()
             print(f"  Buffer size: {len(self.replay_buffer)}")
         
         print(f"STARTING POLICY TRAINING")
         print(f"  Parameters: {count_policy_params(self.policy)}")
         print(f"  Total steps: {total_steps}")
-        print(f"  Horizon schedule: mode={pc.get('horizon_mode', 'decay')}  H=[{pc.get('min_horizon', 5)}, {pc.get('max_horizon', 30)}]")
-        print(f"  Batch size: {pc['batch_size']}")
+        print(f"  Horizon schedule: mode={policy.get('horizon_mode', 'decay')}  H=[{policy.get('min_horizon', 5)}, {policy.get('max_horizon', 30)}]")
+        print(f"  Batch size: {policy['batch_size']}")
         print(f"  Offline mode: {offline_mode}")
         print(f"  Buffer size: {len(self.replay_buffer)}")
         
-        start_Time = time.time()
+        start_time = time.time()
         best_eval_return = -float('inf')
         
         # HORIZON SCHEDULE PARAMETERS 
@@ -491,23 +496,106 @@ class ActorCriticTrainer:
         """ MAIN LOOP """
         for step in range(total_steps):
             
+            self.global_step = step
+            
+            current_horizon = get_horizon(
+                current_step = step,
+                total_steps = total_steps,
+                min_horizon = horizon_min,
+                max_horizon = horizon_max,
+                mode = horizon_mode,
+            )
+            
             """ Collect Real Data """        
+            if not offline_mode and step % policy.get('collect_interval', 1) == 0:
+                episode_info = self.collect_real_episode()
+                
+                if use_wandb and episode_info:
+                    wandb.log({
+                        'env/episode_return': episode_info['episode_return'],
+                        'env/episode_length': episode_info['episode_length'],
+                    } , step = step)
             
             """ Train Aux Networks (REAL DATA)"""
+            aux_metrics = self._train_aux(
+                num_batches = policy.get('aux_batches', 1),
+            )
             
             """ Imagination Rollout (WORLD MODEL latent rollout)  """
+            seed_context = self.replay_buffer.sample_seed_context(
+                batch_size = policy['batch_size'],
+                context_len = policy['seed_context_len']
+            )
+
+            imagined_trajectory = self.imagination.rollout(
+                seed_tokens = seed_context['tokens'],
+                seed_actions = seed_context['actions'],
+                horizon = current_horizon,
+            )
             
             """ Train Actor Critic Networks (IMAGINED DATA) """
+            actor_critic_metrics = self._train_actor_critic(imagined_trajectory)
             
             """ Logging """
+            if step % log_interval == 0:
+                elapsed = time.time() - start_time
+                steps_per_second = (step + 1) / max(elapsed, 1)
+                
+                print(
+                    f"Step {step:>6d}/{total_steps} | "
+                    f"H={current_horizon} | "
+                    f"actor_loss={actor_critic_metrics['actor/loss']:.4f} | "
+                    f"critic_loss={actor_critic_metrics['critic/loss']:.4f} | "
+                    f"entropy={actor_critic_metrics['actor/entropy']:.3f} | "
+                    f"returns={actor_critic_metrics['returns/mean']:.3f} | "
+                    f"reward_loss={aux_metrics['aux/reward_loss']:.4f} | "
+                    f"sps={steps_per_second:.1f}"
+                )
+                
+                if use_wandb:
+                    metrics = {
+                        **aux_metrics,
+                        **actor_critic_metrics,
+                        'speed/sps': steps_per_second,
+                        'horizon/current': current_horizon,
+                    }
+                    wandb.log(metrics, step = step)
         
             """ Evaluation """
+            if step % eval_interval == 0 and step > 0 and not offline_mode:
+                eval_metrics = self.evaluate(num_episodes=5)
+                print(f"\n  EVAL @ step {step}: return={eval_metrics['eval/return_mean']:.1f}")
+                
+                if use_wandb:
+                    wandb.log(eval_metrics, step=step)
+                
+                # Save best
+                if eval_metrics['eval/return_mean'] > best_eval_return:
+                    best_eval_return = eval_metrics['eval/return_mean']
+                    self._save_checkpoint(
+                        os.path.join(save_directory, "best_policy.pt"),
+                        step, best_eval_return,
+                    )
             
-            """ Checkpointing """
+            """ Periodic Checkpoint """
+            if step % eval_interval == 0 and step > 0:
+                self._save_checkpoint(
+                    os.path.join(save_directory, f"policy_step_{step}.pt"),
+                    step, best_eval_return,
+                )
         
         """ Final Save """
-        pass
-    
+        self._save_checkpoint(
+            os.path.join(save_directory, "final_policy.pt"),
+            total_steps, best_eval_return,
+        )
+        
+        total_time = time.time() - start_time
+        print(f"\nTraining complete in {total_time / 3600:.1f} hours")
+        print(f"Best eval return: {best_eval_return:.1f}")
+        
+        if use_wandb:
+            wandb.finish()
     
     def _save_checkpoint(
         self,
