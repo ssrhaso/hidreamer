@@ -99,7 +99,20 @@ def load_frozen_models(
     print(f"  Loaded from epoch {world_model_checkpoint.get('epoch', '?')}, val_loss={world_model_checkpoint.get('best_val_loss', '?')}")
     
     
+    # 2. HRVQ Tokenizer
     print("\nLoading frozen HRVQ TOKENIZER...")
+    hrvq = HRVQTokenizer(
+        input_dim=384, num_codes_per_layer=256, num_layers=3,
+        commitment_costs=[0.05, 0.25, 0.60],
+    ).to(device)
+    
+    hrvq.load_state_dict(torch.load(paths['hrvq_tokenizer'], map_location=device, weights_only=False))
+    hrvq.eval()
+    
+    # FREEZE
+    for p in hrvq.parameters():
+        p.requires_grad = False
+    print(f"  HRVQ Tokenizer loaded and FROZEN")
     
     print("\nLoading frozen CNN ENCODER...")
     
