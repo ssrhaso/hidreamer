@@ -114,6 +114,19 @@ def load_frozen_models(
         p.requires_grad = False
     print(f"  HRVQ Tokenizer loaded and FROZEN")
     
+    # 3. CNN Encoder
     print("\nLoading frozen CNN ENCODER...")
+    encoder = AtariCNNEncoder(input_channels=4, embedding_dim=384).to(device)
     
-    pass
+    
+    encoder_checkpoint = torch.load(paths['encoder'], map_location=device, weights_only=False)
+    encoder.load_state_dict(encoder_checkpoint['model_state_dict'])
+    encoder.eval()
+    for p in encoder.parameters():
+        p.requires_grad_(False)
+    encoder_params = sum(p.numel() for p in encoder.parameters())
+    print(f"  CNN encoder: {encoder_params:,} params (FROZEN)")
+    
+    # NOTE: count_parameters() filters by requires_grad, so returns 0 after freezing, hence manual counting.
+    
+    return world_model, hrvq, encoder
