@@ -158,3 +158,22 @@ def make_env(
         print(f"  Running in offline mode only")
         return None, None
 
+def load_offline_buffer(
+    config : dict,
+    game : str,
+    device : torch.device
+) -> TokenReplayBuffer:
+    """ LOAD pre-collected data into replay buffer """
+    
+    print(f"\nLoading offline buffer for {game}...")
+    
+    buffer = TokenReplayBuffer.from_numpy_data(
+        tokens_dir = config['data']['tokens_dir'],
+        replay_dir = config['data']['replay_dir'],
+        game = game,
+        capacity = 100_000,
+        seq_len = 64,
+        device = device,
+    )
+    print(f"  Buffer ready: {len(buffer)} transitions")
+    return buffer
