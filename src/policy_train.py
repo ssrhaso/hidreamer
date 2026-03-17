@@ -130,3 +130,31 @@ def load_frozen_models(
     # NOTE: count_parameters() filters by requires_grad, so returns 0 after freezing, hence manual counting.
     
     return world_model, hrvq, encoder
+
+def make_env(
+    game : str,
+    seed : int = 42
+):
+    """ Create Gymnasium ALE environment with standard Atari preprocessing. """
+    
+    try:
+        import ale_py
+        import gymnasium as gym
+        
+        env_name = f"ALE/{game}"
+        env = gym.make(env_name)
+        env = gym.wrappers.AtariPreprocessing(
+            env, frame_skip=1, screen_size=84,
+            grayscale_obs=True, scale_obs=False,
+        )
+        env = gym.wrappers.FrameStackObservation(env, stack_size=4)
+        env.reset(seed=seed)
+        
+        num_actions = env.action_space.n
+        print(f"  Environment: {env_name}, {num_actions} actions")
+        return env, num_actions
+    except Exception as e:
+        print(f"  WARNING: Could not create environment ({e})")
+        print(f"  Running in offline mode only")
+        return None, None
+
