@@ -67,3 +67,22 @@ def load_offline_buffer(config: dict, game: str, device: torch.device) -> TokenR
     )
     print(f"  Buffer ready: {len(buffer)} transitions")
     return buffer
+
+def load_frozen_models(
+    config : dict,
+    device : torch.device
+):
+    """ LOAD and FREEZE all pre-trained models
+    
+    - World Model 
+    - HRVQ Tokenizer
+    - CNN Encoder
+    """
+    
+    print("\nLoading frozen WORLD MODEL...")
+    
+    print("\nLoading frozen HRVQ TOKENIZER...")
+    
+    print("\nLoading frozen CNN ENCODER...")
+    
+    pass
