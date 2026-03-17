@@ -177,3 +177,27 @@ def load_offline_buffer(
     )
     print(f"  Buffer ready: {len(buffer)} transitions")
     return buffer
+
+def build_trainable_networks(
+    config : dict,
+    hrvq,
+    num_actions : int,
+    device : torch.device
+):
+    """ INSTANTIATE all trainable policy components
+    
+    - Feature extractor (uses frozen HRVQ codebooks)
+    - Actor Network
+    - Critic Network
+    - Reward Predictor
+    - Continue Predictor
+    """
+    
+    pass
+
+
+def main():
+    pass
+
+if __name__ == "__main__":
+    main()
