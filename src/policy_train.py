@@ -79,7 +79,25 @@ def load_frozen_models(
     - CNN Encoder
     """
     
+    paths = config['frozen_models']
+    
+    # 1. World Model
     print("\nLoading frozen WORLD MODEL...")
+    world_model_config = WorldModelConfig.from_yaml("configs/worldmodel.yaml")
+    world_model = HierarchicalWorldModel(world_model_config).to(device)
+    
+    world_model_checkpoint = torch.load(paths['world_model'], map_location=device, weights_only=False)
+    world_model.load_state_dict(world_model_checkpoint['model_state_dict'])
+    world_model.eval()
+    
+    # FREEZE
+    for p in world_model.parameters():
+        p.requires_grad = False
+    
+    world_model_params = sum(p.numel() for p in world_model.parameters())
+    print(f"  World Model loaded with {world_model_params:,} parameters (FROZEN)")
+    print(f"  Loaded from epoch {world_model_checkpoint.get('epoch', '?')}, val_loss={world_model_checkpoint.get('best_val_loss', '?')}")
+    
     
     print("\nLoading frozen HRVQ TOKENIZER...")
     
