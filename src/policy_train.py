@@ -158,25 +158,6 @@ def make_env(
         print(f"  Running in offline mode only")
         return None, None
 
-def load_offline_buffer(
-    config : dict,
-    game : str,
-    device : torch.device
-) -> TokenReplayBuffer:
-    """ LOAD pre-collected data into replay buffer """
-    
-    print(f"\nLoading offline buffer for {game}...")
-    
-    buffer = TokenReplayBuffer.from_numpy_data(
-        tokens_dir = config['data']['tokens_dir'],
-        replay_dir = config['data']['replay_dir'],
-        game = game,
-        capacity = 100_000,
-        seq_len = 64,
-        device = device,
-    )
-    print(f"  Buffer ready: {len(buffer)} transitions")
-    return buffer
 
 def build_trainable_networks(
     config : dict,
@@ -236,7 +217,7 @@ def build_trainable_networks(
     # PARAM COUNTS
     counts = count_policy_params(
         critic = critic,
-        policy = policy,
+        policy = policy,    
         reward_net = reward_net,
         continue_net = continue_net,
         feature_extractor = feature_extractor,
@@ -275,7 +256,7 @@ def main():
     offline_mode = args.offline or config['policy'].get('offline_mode', True)
 
     print()
-    print(f"\GAME: {game}")
+    print(f"GAME: {game}")
     print(f"NUMBER OF ACTIONS: {num_actions}")
     print(f"OFFLINE TRAINING" if offline_mode else "ONLINE TRAINING") 
     print()
@@ -291,7 +272,7 @@ def main():
     print()
     
     # BUILD NETWORKS (TRAINABLE)
-    print(f"Building TRANABLE networks... ")
+    print(f"Building TRAINABLE networks... ")
     feature_extractor, policy, critic, reward_net, continue_net = build_trainable_networks(
         config = config,
         hrvq = hrvq_tokenizer,
@@ -367,8 +348,8 @@ def main():
         feature_extractor = feature_extractor,
         policy = policy,
         critic = critic,
-        reward_net = reward_net,
-        continue_net = continue_net,
+        reward_network = reward_net,
+        continue_network = continue_net,
         imagination = imagination,
         replay_buffer = buffer,
         config = config,
@@ -384,7 +365,7 @@ def main():
     trainer.train(
         total_steps = config['policy']['total_steps'],
         use_wandb = args.wandb,
-        save_dir = config['logging']['save_dir'],
+        save_directory = config['logging']['save_dir'],
         eval_interval = config['policy']['eval_every'],
         log_interval = config['policy']['log_every'],
         prefill_steps = config['policy'].get('prefill_steps', 0),
@@ -393,8 +374,8 @@ def main():
     print()
     print(f"POLICY TRAINING COMPLETE.")
     print()
-    
-    pass
 
 if __name__ == "__main__":
     main()
+    
+    
