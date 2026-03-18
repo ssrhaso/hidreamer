@@ -340,6 +340,60 @@ def main():
     print(f"REPLAY BUFFER ready.")
     print()
     
+    """ IMAGINATION ROLLOUT MODULE"""
+    print(f"Building IMAGINATION module... ")
+    
+    imagination = ImagineRollout(
+        world_model = world_model,
+        feature_extractor = feature_extractor,
+        actor_network = policy,
+        critic_network = critic,
+        reward_network = reward_net,
+        continue_network = continue_net,
+        max_horizon = config['policy'].get('max_horizon', 30),
+        temperature = config['policy']['temperature'],
+        device = device,
+    )
+    print()
+    print(f"IMAGINATION module ready.")
+    print()
+    
+    # TRAINER (ACTOR-CRITIC)
+    print(f"Initializing TRAINER... ")
+    trainer = ActorCriticTrainer(
+        world_model = world_model,
+        hrvq_tokenizer = hrvq_tokenizer,
+        encoder = cnn_encoder,
+        feature_extractor = feature_extractor,
+        policy = policy,
+        critic = critic,
+        reward_net = reward_net,
+        continue_net = continue_net,
+        imagination = imagination,
+        replay_buffer = buffer,
+        config = config,
+        env = env,
+        device = device,
+    )
+    print()
+    print(f"TRAINER initialized.")
+    print()
+    
+    # TRAIN
+    print(f"STARTING TRAINING... ")
+    trainer.train(
+        total_steps = config['policy']['total_steps'],
+        use_wandb = args.wandb,
+        save_dir = config['logging']['save_dir'],
+        eval_interval = config['policy']['eval_every'],
+        log_interval = config['policy']['log_every'],
+        prefill_steps = config['policy'].get('prefill_steps', 0),
+        offline_mode = offline_mode,
+    )
+    print()
+    print(f"POLICY TRAINING COMPLETE.")
+    print()
+    
     pass
 
 if __name__ == "__main__":
