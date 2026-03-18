@@ -233,11 +233,42 @@ def build_trainable_networks(
         hidden_dim = 256,
     ).to(device)
     
+    # PARAM COUNTS
+    counts = count_policy_params(
+        critic = critic,
+        policy = policy,
+        reward_net = reward_net,
+        continue_net = continue_net,
+        feature_extractor = feature_extractor,
+    )
+    print(f"\n  Trainable networks ({mode} mode, feat_dim={feat_dim}):")
+    for name, count in counts.items():
+        print(f"    {name}: {count:,}")
     
-    pass
+    return feature_extractor, policy, critic, reward_net, continue_net
 
 
 def main():
+    
+    # SETUP 
+    args = parse_args()
+    config = load_config(args.config)
+    
+    # SEED
+    torch.manual_seed(args.seed)
+    np.random.seed(args.seed)
+    
+    # DEVICE AND INIT OUTPUT
+    device = torch.device(args.device if torch.cuda.is_available() else "cpu")
+    print()
+    print(f"Hi-DREAMER POLICY TRAINING")
+    print()
+    print(f"Device: {device}")
+    
+    if device.type == 'cuda':
+        print(f"  GPU: {torch.cuda.get_device_name(0)}")
+
+    
     pass
 
 if __name__ == "__main__":
