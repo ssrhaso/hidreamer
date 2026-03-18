@@ -264,10 +264,81 @@ def main():
     print(f"Hi-DREAMER POLICY TRAINING")
     print()
     print(f"Device: {device}")
+    print()
     
     if device.type == 'cuda':
         print(f"  GPU: {torch.cuda.get_device_name(0)}")
 
+    # OVERRIDE GAME IF SPECIFIED
+    game = args.game or config['policy']['game']
+    num_actions = config['policy']['num_actions']
+    offline_mode = args.offline or config['policy'].get('offline_mode', True)
+
+    print()
+    print(f"\GAME: {game}")
+    print(f"NUMBER OF ACTIONS: {num_actions}")
+    print(f"OFFLINE TRAINING" if offline_mode else "ONLINE TRAINING") 
+    print()
+    
+    # LOAD FROZEN MODELS
+    
+    print(f"Loading FROZEN models... ")
+    print()
+    world_model, hrvq_tokenizer, cnn_encoder = load_frozen_models(
+        config = config, device = device
+    )
+    print(f"FROZEN models loaded.")
+    print()
+    
+    # BUILD NETWORKS (TRAINABLE)
+    print(f"Building TRANABLE networks... ")
+    feature_extractor, policy, critic, reward_net, continue_net = build_trainable_networks(
+        config = config,
+        hrvq = hrvq_tokenizer,
+        num_actions = num_actions,
+        device = device,
+    )
+    print()
+    print(f"TRAINABLE networks built.")
+    print()
+    
+    # ENVIRONMENT (if not offline-only)
+    env = None
+    if not offline_mode:
+        print(f"Building ENVIRONMENT (ALE)... ")
+        env, env_actions = make_env(
+            game = game,
+            seed = args.seed,
+        )
+        print()
+        
+        # CHECK ACTION SPACE
+        if env_actions and env_actions != num_actions:
+            print(f"  WARNING: config num_actions={num_actions} but env has {env_actions}")
+            num_actions = env_actions
+            print()
+        
+        print(f"ENVIRONMENT ready.")
+        print()
+        
+    # REPLAY BUFFER
+    print(f"Building REPLAY BUFFER... ")
+    if offline_mode:
+        buffer = load_offline_buffer(
+            config = config,
+            game = game,
+            device = device,
+        )
+    
+    else:
+        buffer = TokenReplayBuffer(
+            capacity = 100_000,
+            seq_len = 64,
+            device = device,
+        )
+    print()
+    print(f"REPLAY BUFFER ready.")
+    print()
     
     pass
 
