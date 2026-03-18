@@ -193,6 +193,47 @@ def build_trainable_networks(
     - Continue Predictor
     """
     
+    policy_config = config['policy']
+    mode = policy_config.get('feature_mode', 'concat')
+    
+    # 1. FEATURE EXTRACTOR (Frozen HRVQ codebooks)
+    feature_extractor = HierarchicalFeatureExtractor(
+        hrvq_tokenizer = hrvq,
+        mode = mode,
+        d_model = 384,
+    ).to(device)
+    
+    # EXTRACT
+    feat_dim = feature_extractor.feat_dim
+    hidden_dim = policy_config.get('hidden_dim', 512)
+    
+    # 2. ACTOR NETWORK
+    policy = ActorNetwork(
+        feat_dim = feat_dim,
+        num_actions = num_actions,
+        hidden_dim = hidden_dim,
+        unimix = policy_config.get('unimix', 0.01),
+    ).to(device)
+    
+    # 3. CRITIC NETWORK
+    critic = CriticNetwork(
+        feat_dim = feat_dim,
+        hidden_dim = hidden_dim,
+    ).to(device)
+    
+    # 4. REWARD NETWORK
+    reward_net = RewardNetwork(
+        feat_dim = feat_dim,
+        hidden_dim = hidden_dim,
+    ).to(device)
+    
+    # 5. CONTINUE NETWORK
+    continue_net = ContinueNetwork(
+        feat_dim = feat_dim,
+        hidden_dim = 256,
+    ).to(device)
+    
+    
     pass
 
 
