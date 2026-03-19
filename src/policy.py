@@ -39,6 +39,7 @@ def get_horizon(
     total_steps : int,
     max_horizon : int = 30,
     min_horizon : int = 5,
+    flat_horizon : int = 15,
     mode : str = "decay", # "flat" , "decay" , "bell"
 ) -> int:
     """ Unified Horizon Scheduler for Imagination Rollouts.
@@ -52,7 +53,7 @@ def get_horizon(
     
     # 15 STEP CONSTANT HORIZON (DREAMERV3 DEFAULT) [15]
     if mode == "flat":
-        return max_horizon 
+        return flat_horizon
     
     # COSINE DECAY FROM MAX_HORIZON TO MIN_HORIZON [30 -> 5]
     elif mode == "decay":
@@ -372,17 +373,12 @@ def compute_lambda_returns(
     next_val = last_value 
     
     for t in reversed(range(H)):
-        # DISCOUNT FACTOR (Continue Network)
         discount = gamma * continues[:, t]
-        
-        # BLEND FUTURE VALUE WEIGHTED BY LAMBDA (0.05 vs 0.95)
-        blend = (1 - lam) * values[:, t] + lam * next_val
-        
-        # COMPUTE TARGET FOR THIS STEP
+        # Use NEXT state's value for one-step bootstrap
+        next_state_value = values[:, t + 1] if t < H - 1 else last_value
+        blend = (1 - lam) * next_state_value + lam * next_val
         targets[:, t] = rewards[:, t] + discount * blend
-        
-        # UPDATE
-        next_val = targets[:, t] 
+        next_val = targets[:, t]
     
     return targets
     
