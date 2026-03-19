@@ -617,7 +617,7 @@ class ActorCriticTrainer:
         torch.save({
             'step': step,
             'best_return': best_return,
-            'game': self.config.get('game', 'unknown'),   
+            'game': self.config['policy'].get('game', 'unknown'),  
             'policy_state_dict': self.policy.state_dict(),
             'critic_state_dict': self.critic.state_dict(),
             'reward_net_state_dict': self.reward_network.state_dict(),

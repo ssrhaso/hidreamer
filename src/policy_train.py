@@ -205,13 +205,13 @@ def build_trainable_networks(
     # 4. REWARD NETWORK
     reward_net = RewardNetwork(
         feat_dim = feat_dim,
-        hidden_dim = hidden_dim // 2,
+        hidden_dim = hidden_dim,
     ).to(device)
     
     # 5. CONTINUE NETWORK
     continue_net = ContinueNetwork(
         feat_dim = feat_dim,
-        hidden_dim = hidden_dim,
+        hidden_dim = hidden_dim // 2,
     ).to(device)
     
     # PARAM COUNTS
