@@ -19,6 +19,7 @@ policy:
 
   max_horizon: 30            # Upper bound of schedule (flat: constant H)
   min_horizon: 5             # Lower bound of schedule (flat: ignored)
+  flat_horizon: 15           # If horizon_mode=flat, use this constant H
  
   temperature: 1.0           # Sampling temperature during imagination
   seed_context_len: 16       # Timesteps of real context to seed imagination
