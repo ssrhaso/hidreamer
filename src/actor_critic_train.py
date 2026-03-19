@@ -478,12 +478,21 @@ class ActorCriticTrainer:
             print(f"  Buffer size: {len(self.replay_buffer)}")
         
         print(f"STARTING POLICY TRAINING")
-        print(f"  Parameters: {count_policy_params(self.policy)}")
+        print(f"  Parameters: {count_policy_params(
+            critic=self.critic, actor=self.policy,
+            reward_net=self.reward_network, continue_net=self.continue_network,
+            feature_extractor=self.feature_extractor
+        )}")
+        print()
         print(f"  Total steps: {total_steps}")
+        print()
         print(f"  Horizon schedule: mode={policy_config.get('horizon_mode', 'decay')}  H=[{policy_config.get('min_horizon', 5)}, {policy_config.get('max_horizon', 30)}]")
+        print()
         print(f"  Batch size: {policy_config['batch_size']}")
         print(f"  Offline mode: {offline_mode}")
+        print()
         print(f"  Buffer size: {len(self.replay_buffer)}")
+        print()
         
         start_time = time.time()
         best_eval_return = -float('inf')
@@ -503,6 +512,7 @@ class ActorCriticTrainer:
                 total_steps = total_steps,
                 min_horizon = horizon_min,
                 max_horizon = horizon_max,
+                flat_horizon = policy_config.get('flat_horizon', 15),
                 mode = horizon_mode,
             )
             
