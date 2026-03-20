@@ -425,6 +425,7 @@ class ActorCriticTrainer:
                 done = terminated or truncated
                 episode_return += reward
                 episode_length += 1
+                obs = next_obs
             
             returns.append(episode_return)
             lengths.append(episode_length)
