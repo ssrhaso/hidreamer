@@ -752,7 +752,7 @@ class ActorCriticTrainer:
         best_return : float,
     ):
         """ SAVE AND LOGGING """
-        torch.save({
+        checkpoint = {
             'step': step,
             'best_return': best_return,
             'game': self.config['policy'].get('game', 'unknown'),  
@@ -764,14 +764,22 @@ class ActorCriticTrainer:
             'actor_optim_state_dict': self.actor_optimizer.state_dict(),
             'critic_optim_state_dict': self.critic_optimizer.state_dict(),
             'aux_optim_state_dict': self.aux_optimizer.state_dict(),
-        }, path)
+        }
+
+        # Save WM state if joint training (critical for Colab resume)
+        if self.joint_training_enabled:
+            checkpoint['world_model_state_dict'] = self.world_model.state_dict()
+            checkpoint['wm_optim_state_dict'] = self.wm_optimizer.state_dict()
+            checkpoint['wm_scaler_state_dict'] = self.wm_scaler.state_dict()
+
+        torch.save(checkpoint, path)
         
         
         
         # Upload to W&B Artifacts
         if wandb.run is not None:
             artifact = wandb.Artifact(
-                name=f"hidreamer-actor-critic-{self.config.get('game', 'unknown')}-step{step}",
+                name=f"hidreamer-actor-critic-{self.config['policy'].get('game', 'unknown')}-step{step}",
                 type="model",
                 metadata={'step': step, 'best_return': best_return},
             )
