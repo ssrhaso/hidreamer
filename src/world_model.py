@@ -2,6 +2,7 @@
 
 - WIP 1 : BASELINE IMPLEMENTATION - STORM(2023) INSPIRED
 - WIP 2 : TWISTER(2025) / DREAMERv4(2025) INSPIRED IMPROVEMENTS
+- WIP 3 : KV-CACHE FOR IMAGINATION ROLLOUT ACCELERATION
 
 """
 
@@ -181,6 +182,44 @@ class TokenEmbedding(nn.Module):
         seq = seq + self.pos_embed(positions)
         
         return seq
+
+    def embed_partial(
+        self,
+        tokens : torch.Tensor,      # (B, 1, 3) — single timestep
+        actions : torch.Tensor,     # (B, 1)    — single action
+        start_pos : int,             # position offset in the full sequence
+    ) -> torch.Tensor:              # (B, 4, d_model) — 4 new positions
+        """Embed a SINGLE TIMESTEP with correct positional encoding.
+        
+        Used by incremental KV-cache forward to embed only the NEW positions
+        without re-embedding the entire context.
+        """
+        B = tokens.size(0)
+        device = tokens.device
+        
+        # 1. EMBED Each component (single timestep)
+        emb_l0 = self.token_embeds[0](tokens[:, 0, 0])    # (B, d_model)
+        emb_l1 = self.token_embeds[1](tokens[:, 0, 1])    # (B, d_model)
+        emb_l2 = self.token_embeds[2](tokens[:, 0, 2])    # (B, d_model)
+        emb_act = self.action_embed(actions[:, 0])          # (B, d_model)
+        
+        # 2. ADD LEVEL EMBEDDING
+        level_ids = torch.arange(4, device=device)
+        level_embeds = self.level_embed(level_ids)
+        
+        emb_l0 = emb_l0 + level_embeds[0]
+        emb_l1 = emb_l1 + level_embeds[1]
+        emb_l2 = emb_l2 + level_embeds[2]
+        emb_act = emb_act + level_embeds[3]
+        
+        # 3. STACK into (B, 4, d_model)
+        seq = torch.stack([emb_l0, emb_l1, emb_l2, emb_act], dim=1)
+        
+        # 4. ADD POSITIONAL EMBEDDING (offset by start_pos)
+        positions = torch.arange(start_pos, start_pos + 4, device=device)
+        seq = seq + self.pos_embed(positions)
+        
+        return seq
         
      
         
@@ -264,6 +303,8 @@ class TransformerBlock(nn.Module):
         config : WorldModelConfig
     ):
         super().__init__()
+        self.config = config
+        self.d_head = config.d_model // config.n_heads
         
         """ 6 HEAD MULTI-HEAD SELF-ATTENTION LAYER
         'Group Reflection' layer """
@@ -301,7 +342,7 @@ class TransformerBlock(nn.Module):
         x : torch.tensor,         # SHAPE: (B, seq_len, 384) 
         mask : torch.tensor       # SHAPE: (seq_len, seq_len) - HCAUSAL MASK
     ) -> torch.tensor:            # SHAPE: (B, seq_len, 384) 
-        """ FORWARD PASS THROUGH 1 TRANSFORMER BLOCK
+        """ FORWARD PASS THROUGH 1 TRANSFORMER BLOCK (ORIGINAL - UNCHANGED)
         X > NORM > ATTENTION > RESIDUAL > NORM > FFN > RESIDUAL > Y
         """
         
@@ -330,8 +371,180 @@ class TransformerBlock(nn.Module):
         x = x + ffn_out
         
         return x
+
+    def forward_with_kv(
+        self,
+        x : torch.Tensor,         # (B, seq_len, 384)
+        mask : torch.Tensor,      # (seq_len, seq_len)
+    ) -> Tuple[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+        """Forward pass that ALSO RETURNS the KV cache for this layer.
         
+        Identical computation to forward(), but extracts K and V tensors
+        after the in_proj inside nn.MultiheadAttention so we can reuse them.
+        
+        Returns:
+            x:      (B, seq_len, 384) — same as forward()
+            kv:     (cached_k, cached_v) each (B, n_heads, seq_len, d_head)
+        """
+        
+        # 1. PRE-NORM
+        x_norm = self.ln1(x)
+        
+        # 2. ATTENTION — use forward() but also extract K, V for caching
+        # nn.MHA stores in_proj_weight: (3*d_model, d_model) and in_proj_bias: (3*d_model,)
+        # We project Q, K, V manually to extract K, V for caching
+        attn_out, cached_k, cached_v = self._attention_with_kv_extract(
+            x_norm, x_norm, x_norm, mask
+        )
+        
+        # 3. RESIDUAL
+        x = x + attn_out
+        
+        # 4. FFN
+        x_norm = self.ln2(x)
+        ffn_out = self.ffn(x_norm)
+        x = x + ffn_out
+        
+        return x, (cached_k, cached_v)
     
+    def forward_incremental(
+        self,
+        x_new : torch.Tensor,                               # (B, new_len, 384) — NEW positions only
+        past_kv : Tuple[torch.Tensor, torch.Tensor],       # (cached_k, cached_v) from previous pass
+        mask_rows : torch.Tensor,                            # (new_len, total_len) — mask rows for new positions
+    ) -> Tuple[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+        """Incremental forward: process ONLY new positions against cached K/V.
+        
+        This is the core of the KV-cache speedup. Instead of recomputing
+        attention over the entire context, we:
+        1. Project new positions to get Q_new, K_new, V_new
+        2. Concatenate K_new, V_new with cached K, V
+        3. Compute attention: Q_new @ [K_cached | K_new]^T
+        4. Apply hierarchical mask rows for the new positions
+        
+        Returns:
+            x_new:      (B, new_len, 384) — output for new positions only
+            updated_kv: (updated_k, updated_v) — cache extended with new K/V
+        """
+        
+        # 1. PRE-NORM on new positions
+        x_norm = self.ln1(x_new)
+        
+        # 2. INCREMENTAL ATTENTION with cached K/V
+        attn_out, updated_k, updated_v = self._incremental_attention(
+            x_norm, past_kv, mask_rows
+        )
+        
+        # 3. RESIDUAL
+        x_new = x_new + attn_out
+        
+        # 4. FFN on new positions only
+        x_norm = self.ln2(x_new)
+        ffn_out = self.ffn(x_norm)
+        x_new = x_new + ffn_out
+        
+        return x_new, (updated_k, updated_v)
+    
+    def _attention_with_kv_extract(
+        self,
+        query : torch.Tensor,    # (B, S, d_model)
+        key : torch.Tensor,      # (B, S, d_model)
+        value : torch.Tensor,    # (B, S, d_model)
+        mask : torch.Tensor,     # (S, S)
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Run MHA and extract K, V tensors for caching.
+        
+        Uses the SAME weights as self.attn (nn.MultiheadAttention).
+        We manually do the in_proj to get separate Q, K, V, then use
+        F.scaled_dot_product_attention for the actual computation.
+        """
+        B, S, D = query.shape
+        n_heads = self.config.n_heads
+        d_head = self.d_head
+        
+        # Extract weights from nn.MHA (stored as single concatenated matrix)
+        W = self.attn.in_proj_weight    # (3*D, D)
+        b = self.attn.in_proj_bias      # (3*D,)
+        
+        # Project Q, K, V using the SAME weights as nn.MHA
+        Q = F.linear(query, W[:D], b[:D])          # (B, S, D)
+        K = F.linear(key, W[D:2*D], b[D:2*D])      # (B, S, D)
+        V = F.linear(value, W[2*D:], b[2*D:])       # (B, S, D)
+        
+        # Reshape to multi-head: (B, n_heads, S, d_head)
+        Q = Q.view(B, S, n_heads, d_head).transpose(1, 2)
+        K = K.view(B, S, n_heads, d_head).transpose(1, 2)
+        V = V.view(B, S, n_heads, d_head).transpose(1, 2)
+        
+        # Scaled dot-product attention with mask
+        # PyTorch SDPA expects mask: (S, S) or (B, n_heads, S, S)
+        # Our mask is (S, S) float with -inf for blocked positions
+        # SDPA's attn_mask is ADDITIVE (added to QK^T), matching our format
+        attn_out = F.scaled_dot_product_attention(
+            Q, K, V,
+            attn_mask = mask,
+            dropout_p = self.attn.dropout if self.training else 0.0,
+        )  # (B, n_heads, S, d_head)
+        
+        # Reshape back: (B, S, D)
+        attn_out = attn_out.transpose(1, 2).contiguous().view(B, S, D)
+        
+        # Output projection (same weights as nn.MHA)
+        attn_out = self.attn.out_proj(attn_out)
+        
+        return attn_out, K, V
+    
+    def _incremental_attention(
+        self,
+        x_new_norm : torch.Tensor,                           # (B, new_len, D) — pre-normed new positions
+        past_kv : Tuple[torch.Tensor, torch.Tensor],        # (K_cached, V_cached) each (B, n_heads, cached_len, d_head)
+        mask_rows : torch.Tensor,                             # (new_len, total_len)
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Incremental attention: new Q attends to [cached_K | new_K].
+        
+        This is where the O(n²) → O(n) savings happen.
+        """
+        B, new_len, D = x_new_norm.shape
+        n_heads = self.config.n_heads
+        d_head = self.d_head
+        
+        K_cached, V_cached = past_kv  # (B, n_heads, cached_len, d_head)
+        
+        # Extract weights
+        W = self.attn.in_proj_weight    # (3*D, D)
+        b = self.attn.in_proj_bias      # (3*D,)
+        
+        # Project ONLY the new positions
+        Q_new = F.linear(x_new_norm, W[:D], b[:D])              # (B, new_len, D)
+        K_new = F.linear(x_new_norm, W[D:2*D], b[D:2*D])        # (B, new_len, D)
+        V_new = F.linear(x_new_norm, W[2*D:], b[2*D:])           # (B, new_len, D)
+        
+        # Reshape to multi-head
+        Q_new = Q_new.view(B, new_len, n_heads, d_head).transpose(1, 2)  # (B, n_heads, new_len, d_head)
+        K_new = K_new.view(B, new_len, n_heads, d_head).transpose(1, 2)
+        V_new = V_new.view(B, new_len, n_heads, d_head).transpose(1, 2)
+        
+        # CONCATENATE with cached K/V → full context for attention
+        K_full = torch.cat([K_cached, K_new], dim=2)  # (B, n_heads, total_len, d_head)
+        V_full = torch.cat([V_cached, V_new], dim=2)  # (B, n_heads, total_len, d_head)
+        
+        # Attention: Q_new @ K_full^T → only compute new rows
+        # mask_rows: (new_len, total_len) — hierarchical mask for new positions
+        attn_out = F.scaled_dot_product_attention(
+            Q_new, K_full, V_full,
+            attn_mask = mask_rows,
+            dropout_p = self.attn.dropout if self.training else 0.0,
+        )  # (B, n_heads, new_len, d_head)
+        
+        # Reshape back
+        attn_out = attn_out.transpose(1, 2).contiguous().view(B, new_len, D)
+        
+        # Output projection
+        attn_out = self.attn.out_proj(attn_out)
+        
+        return attn_out, K_full, V_full
+
+
 class HierarchicalWorldModel(nn.Module):
     """ MAIN HIERARCHICAL WORLD MODEL FOR ATARI100K PREDICTION  """
     def __init__(
@@ -381,7 +594,7 @@ class HierarchicalWorldModel(nn.Module):
         tokens : torch.tensor,      # SHAPE: (B, T, 3) - HRVQ TOKENS , 3 LAYERS [L0, L1, L2]
         actions : torch.tensor,     # SHAPE: (B, T) - ACTIONS
     ) -> Tuple[torch.tensor, torch.tensor, torch.tensor]:  
-        """ FORWARD PASS THROUGH WORLD MODEL (EXECUTION) """
+        """ FORWARD PASS THROUGH WORLD MODEL (ORIGINAL — UNCHANGED for WM training) """
         
         
         """ PRE PROCESSING"""
@@ -413,6 +626,113 @@ class HierarchicalWorldModel(nn.Module):
         logits_l0 = self.headl0(action_positions)  # (B, T, 256 codes) - PREDICT L0 (PHYSICS, COARSE)
         logits_l1 = self.headl1(l0_positions)      # (B, T, 256 codes) - PREDICT L1 (MECHANICS, MEDIUM)
         logits_l2 = self.headl2(l1_positions)      # (B, T, 256 codes) - PREDICT L2 (OBJECTS, FINE)
+        
+        return logits_l0, logits_l1, logits_l2
+
+    def forward_with_kv(
+        self,
+        tokens : torch.Tensor,      # (B, T, 3)
+        actions : torch.Tensor,     # (B, T)
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, list]:
+        """Full forward pass that ALSO RETURNS KV cache from each layer.
+        
+        Used for the INITIAL seed context processing during imagination.
+        After this call, subsequent timesteps use forward_incremental().
+        
+        Returns:
+            logits_l0:  (B, T, 256)
+            logits_l1:  (B, T, 256)
+            logits_l2:  (B, T, 256)
+            kv_cache:   list of (K, V) tuples, one per transformer layer
+                        each K, V is (B, n_heads, T*4, d_head)
+        """
+        B, T, _ = tokens.shape
+        
+        # Embedding
+        x = self.embedding(tokens=tokens, actions=actions)  # (B, T*4, d_model)
+        
+        # Get mask for full sequence
+        mask = self._get_mask(seq_len=x.size(1), device=x.device)
+        
+        # Forward through blocks, collecting KV cache
+        kv_cache = []
+        for block in self.blocks:
+            x, kv = block.forward_with_kv(x, mask)
+            kv_cache.append(kv)
+        
+        # Final norm
+        x = self.ln_final(x)
+        
+        # Extract predictions (same logic as forward())
+        action_positions = x[:, 3::4, :]
+        l0_positions = x[:, 0::4, :]
+        l1_positions = x[:, 1::4, :]
+        
+        logits_l0 = self.headl0(action_positions)
+        logits_l1 = self.headl1(l0_positions)
+        logits_l2 = self.headl2(l1_positions)
+        
+        return logits_l0, logits_l1, logits_l2, kv_cache
+    
+    def forward_incremental(
+        self,
+        tokens_new : torch.Tensor,   # (B, 1, 3) — single new timestep tokens
+        actions_new : torch.Tensor,  # (B, 1)    — single new action
+        kv_cache : list,              # list of (K, V) per layer
+        cached_seq_len : int,         # how many positions are already cached
+    ) -> Tuple[torch.Tensor, list]:
+        """Incremental forward: process ONLY new positions using cached K/V.
+        
+        Embeds the new timestep (4 positions), runs through all transformer
+        blocks using cached K/V, returns hidden states at new positions
+        and the updated KV cache.
+        
+        Returns:
+            x_new:          (B, 4, d_model) — hidden states for 4 new positions
+            updated_cache:  list of (K, V) per layer (extended by 4 positions)
+        """
+        # 1. Embed ONLY the new timestep (4 positions with correct pos encoding)
+        x_new = self.embedding.embed_partial(
+            tokens_new, actions_new, start_pos=cached_seq_len
+        )  # (B, 4, d_model)
+        
+        total_len = cached_seq_len + 4
+        
+        # 2. Get mask rows for the 4 new positions
+        # We need the full mask at total_len, then extract the last 4 rows
+        full_mask = self._get_mask(seq_len=total_len, device=x_new.device)
+        mask_rows = full_mask[cached_seq_len:total_len, :total_len]  # (4, total_len)
+        
+        # 3. Forward through blocks incrementally
+        updated_cache = []
+        for layer_idx, block in enumerate(self.blocks):
+            x_new, updated_kv = block.forward_incremental(
+                x_new, kv_cache[layer_idx], mask_rows
+            )
+            updated_cache.append(updated_kv)
+        
+        # 4. Final norm (only on new positions)
+        x_new = self.ln_final(x_new)  # (B, 4, d_model)
+        
+        return x_new, updated_cache
+    
+    def extract_logits_from_positions(
+        self,
+        x : torch.Tensor,   # (B, 4, d_model) — one timestep's hidden states
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Extract L0, L1, L2 logits from a single timestep's hidden states.
+        
+        Position mapping within one timestep:
+            pos 0 = L0,  pos 1 = L1,  pos 2 = L2,  pos 3 = Action
+            
+        Prediction heads:
+            headl0 reads ACTION position (pos 3) → predicts NEXT L0
+            headl1 reads L0 position (pos 0) → predicts SAME-STEP L1
+            headl2 reads L1 position (pos 1) → predicts SAME-STEP L2
+        """
+        logits_l0 = self.headl0(x[:, 3, :])  # (B, 256) from Action position
+        logits_l1 = self.headl1(x[:, 0, :])  # (B, 256) from L0 position
+        logits_l2 = self.headl2(x[:, 1, :])  # (B, 256) from L1 position
         
         return logits_l0, logits_l1, logits_l2
         
@@ -484,4 +804,3 @@ def hierarchical_loss(
 
 if __name__ == "__main__":
     pass
-   

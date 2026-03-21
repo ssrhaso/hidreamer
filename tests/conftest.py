@@ -33,6 +33,9 @@ def tiny_config() -> WorldModelConfig:
       - d_model divisible by n_heads
       - max_seq_len divisible by 4
       - num_codes / num_actions match production values so token ranges stay valid
+    
+    max_seq_len=128 (bumped from 32) to give headroom for KV-cache 
+    incremental forward tests that need prefix + new positions.
     """
     return WorldModelConfig(
         d_model=64,
@@ -40,7 +43,7 @@ def tiny_config() -> WorldModelConfig:
         n_heads=4,
         d_ff=256,
         dropout=0.0,        # deterministic for tests
-        max_seq_len=32,
+        max_seq_len=128,
         num_codes=256,
         num_actions=9,
         layer_weights=[1.0, 0.5, 0.1],
@@ -125,7 +128,7 @@ def tiny_dataset_paths(tmp_path_factory):
     cfg = {
         "model": {
             "d_model": 64, "n_layers": 2, "n_heads": 4, "d_ff": 256,
-            "dropout": 0.0, "max_seq_len": 32, "num_codes": 256,
+            "dropout": 0.0, "max_seq_len": 128, "num_codes": 256,
             "num_actions": 9, "layer_weights": [1.0, 0.5, 0.1],
         },
         "training": {
