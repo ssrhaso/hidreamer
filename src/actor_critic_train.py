@@ -129,7 +129,7 @@ class ActorCriticTrainer:
             self.wm_use_amp = use_amp
             self.wm_grad_clip = jt_config.get('wm_grad_clip', 1.0)
             self.wm_train_ratio = jt_config.get('wm_train_ratio', 1)
-            self.wm_batch_size = jt_config.get('wm_batch_size', 16)
+            self.wm_batch_size = jt_config.get('wm_batch_size', 32)
             self.wm_seq_len = jt_config.get('wm_seq_len', 64)
             self.wm_layer_weights = config.get('model', {}).get(
                 'layer_weights', [1.0, 0.5, 0.1]

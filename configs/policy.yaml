@@ -63,7 +63,7 @@ joint_training:
   wm_weight_decay: 0.01       # Lighter regularization than Phase 2 (0.1)
   wm_grad_clip: 1.0           # Same as Phase 2
   wm_train_ratio: 1           # WM gradient steps per collect_interval (start low, increase if headroom)
-  wm_batch_size: 16           # Sequences per WM gradient step (T4 VRAM limited)
+  wm_batch_size: 32           # Sequences per WM gradient step (T4 VRAM limited)
   wm_seq_len: 64              # Sequence length for WM training batches
   use_amp: true               # Mixed precision for WM training (T4 compatible)
 
