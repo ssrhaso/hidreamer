@@ -43,10 +43,10 @@ policy:
   unimix: 0.01                     # Policy uniform mixture (DreamerV3: 1%)
 
   # TRAINING LOOP
-  total_steps: 200000        # Total imagination training steps
-  collect_interval: 10        # Collect real episode every N training steps, 1 episode every 10 steps
+  total_steps: 100000        # Total imagination training steps
+  collect_interval: 99       # Collect real episode every N training steps, 1 episode every 99 steps (approx. 2 episode per 100 steps)
   aux_batches: 1             # Auxiliary training batches per step
-  eval_every: 5000          # Evaluate every N steps
+  eval_every: 5000           # Evaluate every N steps
   log_every: 100             # Log every N steps
   prefill_steps: 1000        # Random steps before training starts
   
