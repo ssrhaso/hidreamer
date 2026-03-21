@@ -305,22 +305,22 @@ class ActorCriticTrainer:
         lam = policy_config['lambda']
         entropy_scale = policy_config['entropy_scale']
         
+        B, H, feat_dim = trajectory.feats.shape
+        
         # COMPUTE λ RETURNS 
         with torch.no_grad():
             
-            # USE Slow Target for stable value estimates
-            slow_values = torch.zeros_like(trajectory.values)                  # (B, H) empty
-
-            for h in range(trajectory.feats.size(1)):                          # loop over horizon
-                slow_values[:, h] = self.slow_target(trajectory.feats[:, h])   # fill column h , slice to (B, 1152)
-            slow_last = self.slow_target(
-                self.feature_extractor(trajectory.tokens[:, -1])
-            ) 
+            # BATCHED slow-target values: (B, H, feat_dim) -> (B*H, feat_dim) -> (B, H)
+            feats_flat = trajectory.feats.reshape(B * H, feat_dim)       # (B*H, feat_dim)
+            slow_values = self.slow_target(feats_flat).reshape(B, H)     # (B, H)
+            
+            # Bootstrap value for last state
+            last_feat = self.feature_extractor(trajectory.tokens[:, -1])  # (B, feat_dim)
+            slow_last = self.slow_target(last_feat)                       # (B,)
         
         # CONVERT REWARDS from SymLog space -> real space for λ returns
         rewards_real = symexp(trajectory.rewards)  # (B, H)
         
-        # Update RETURN NORMALIZER
         lambda_returns = compute_lambda_returns(
             rewards = rewards_real,
             values = slow_values,
@@ -334,10 +334,8 @@ class ActorCriticTrainer:
         self.return_normalizer.update(lambda_returns)
         self.critic.train()
         
-        # RECOMPUTE Values 
-        values = torch.zeros_like(trajectory.values)                       # (B, H) empty
-        for h in range(trajectory.feats.size(1)):                          # loop over horizon
-            values[:, h] = self.critic(trajectory.feats[:, h].detach())    # fill column h , slice to (B, 1152)
+        # BATCHED critic values: single forward pass over all (B*H) states
+        values = self.critic(feats_flat.detach()).reshape(B, H)   # (B, H)
         
         # CRITIC Loss
         value_targets = symlog(lambda_returns).detach()

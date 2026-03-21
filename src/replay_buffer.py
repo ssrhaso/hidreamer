@@ -71,7 +71,18 @@ class TokenReplayBuffer:
         N = tokens.size(0)
         for i in range(N):
             self.push(tokens[i], actions[i].item(), rewards[i].item(), dones[i].item())
-    
+            
+    def _build_sequence_indices(
+        self,
+        start_indices : torch.Tensor,  # (B,) int64
+        length        : int,
+    ) -> torch.Tensor:
+        """ VECTORISED: Replaces [self._tokens[s:s + self.seq_len] for s in start_indices] with a single gather operation. """
+        
+        offsets = torch.arange(length, dtype = torch.long)           # (L, )
+        indices = start_indices.unsqueeze(1) + offsets.unsqueeze(0)  # (B, L)
+        return indices
+
     def sample(
         self,
         batch_size : int,
@@ -91,7 +102,26 @@ class TokenReplayBuffer:
         
         start_indicies = torch.randint(0, max_start, (batch_size,))
         
-        # LIST COMPREHENSION for GATHERING SEQUENCES
+        
+        
+        # VECTORISED GATHERING OF SEQUENCES (REPLACES LIST COMPREHENSION)
+        
+        indices = self._build_sequence_indices(start_indices = start_indicies, length = self.seq_len)  # (B, L)
+        
+        tokens_batch = self._tokens[indices].to(self.device)  # (B, seq_len, 3)
+        actions_batch = self._actions[indices].to(self.device)  # (B, seq_len)
+        rewards_batch = self._rewards[indices].to(self.device)  # (B, seq_len)
+        dones_batch = self._dones[indices].to(self.device)  # (B, seq_len)
+        
+        return {
+            'tokens'    : tokens_batch,   # (B, seq_len, 3)
+            'actions'   : actions_batch, # (B, seq_len)
+            'rewards'   : rewards_batch, # (B, seq_len)
+            'dones'     : dones_batch,     # (B, seq_len)
+        }
+        
+        
+        # OLD LIST COMPREHENSION for GATHERING SEQUENCES
         tokens_batch = torch.stack([
             self._tokens[s:s + self.seq_len] for s in start_indicies
         ]).to(self.device)  # (B, L, 3)
@@ -133,6 +163,19 @@ class TokenReplayBuffer:
         
         start_indicies = torch.randint(0, max_start, (batch_size,))
         
+        # VECTORISED GATHERING OF SEQUENCES (REPLACES LIST COMPREHENSION)
+        
+        indices = self._build_sequence_indices(start_indices = start_indicies, length = context_len)  # (B, context_len)
+
+        tokens = self._tokens[indices].to(self.device)  # (B, context_len, 3)
+        actions = self._actions[indices].to(self.device)  # (B, context_len)
+        
+        return {
+            'tokens' : tokens,   # (B, context_len, 3)
+            'actions' : actions, # (B, context_len)
+        }
+        
+        # OLD LIST COMPREHENSION for GATHERING SEQUENCES (ONLY TOKENS AND ACTIONS, NO REWARDS OR DONES)
         tokens = torch.stack([
             self._tokens[s:s + context_len] for s in start_indicies
         ]).to(self.device)  # (B, context_len, 3)
@@ -167,7 +210,17 @@ class TokenReplayBuffer:
 
         start_indicies = torch.randint(0, max_start, (batch_size,))
 
-        # LIST COMPREHENSION for GATHERING SEQUENCES (ONLY TOKENS AND ACTIONS, NO REWARDS OR DONES)
+        # VECTORISED GATHERING OF SEQUENCES (REPLACES LIST COMPREHENSION)
+        indices = self._build_sequence_indices(start_indices = start_indicies, length = seq_len)  # (B, seq_len)
+        tokens_batch = self._tokens[indices].to(self.device)  # (B, seq_len, 3)
+        actions_batch = self._actions[indices].to(self.device)  # (B, seq_len)  
+
+        return {
+            'tokens' : tokens_batch,   # (B, seq_len, 3)
+            'actions' : actions_batch, # (B, seq_len)
+        }
+
+        # OLD LIST COMPREHENSION for GATHERING SEQUENCES (ONLY TOKENS AND ACTIONS, NO REWARDS OR DONES)
 
         tokens_batch = torch.stack([
             self._tokens[s:s + seq_len] for s in start_indicies
