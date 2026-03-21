@@ -1,0 +1,21 @@
+Prefilling replay buffer with 1000 random steps...
+Traceback (most recent call last):
+  File "C:\Users\h8-ahmad\OneDrive - UWE Bristol\Desktop\hidreamer_fresh\src\policy_train.py", line 400, in <module>
+    main()
+    ~~~~^^
+  File "C:\Users\h8-ahmad\OneDrive - UWE Bristol\Desktop\hidreamer_fresh\src\policy_train.py", line 386, in main
+    trainer.train(
+    ~~~~~~~~~~~~~^
+        total_steps = config['policy']['total_steps'],
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+        offline_mode = offline_mode,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\h8-ahmad\OneDrive - UWE Bristol\Desktop\hidreamer_fresh\src\actor_critic_train.py", line 590, in train
+    self.collect_real_episode()
+    ~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\h8-ahmad\OneDrive - UWE Bristol\Desktop\hidreamer_fresh\src\actor_critic_train.py", line 435, in collect_real_episode
+    raise ValueError("Environment not provided for real episode collection.")
+ValueError: Environment not provided for real episode collection.

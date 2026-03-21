@@ -10,3 +10,4 @@ checkpoints/
 __pycache__/
 
 ignore/
+run.ps1
