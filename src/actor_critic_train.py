@@ -20,7 +20,8 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.optim import Adam
+from torch.optim import Adam, AdamW
+from torch import autocast, GradScaler
 from torch.distributions import Bernoulli
 
 import wandb
@@ -41,6 +42,7 @@ from policy import (
     get_horizon,
 )
 
+from world_model import hierarchical_loss
 from imagination import ImagineRollout, Trajectory
 from replay_buffer import TokenReplayBuffer
 
@@ -108,6 +110,35 @@ class ActorCriticTrainer:
             eps = 1e-5,
         )
         
+        # WORLD MODEL OPTIMIZER (JOINT TRAINING)
+        jt_config = config.get('joint_training', {})
+        self.joint_training_enabled = jt_config.get('enabled', False)
+
+        if self.joint_training_enabled:
+            # AdamW matches Phase 2 training (world_model_train.py)
+            # Lower LR (1e-4 vs 3e-4) because we're fine-tuning, not training from scratch
+            self.wm_optimizer = AdamW(
+                params = [p for p in world_model.parameters() if p.requires_grad],
+                lr = jt_config.get('wm_lr', 1e-4),
+                weight_decay = jt_config.get('wm_weight_decay', 0.01),
+                betas = (0.9, 0.95),   # Same as Phase 2 (GPT/STORM convention)
+            )
+
+            use_amp = jt_config.get('use_amp', True) and self.device.type == 'cuda'
+            self.wm_scaler = GradScaler(enabled = use_amp)
+            self.wm_use_amp = use_amp
+            self.wm_grad_clip = jt_config.get('wm_grad_clip', 1.0)
+            self.wm_train_ratio = jt_config.get('wm_train_ratio', 1)
+            self.wm_batch_size = jt_config.get('wm_batch_size', 16)
+            self.wm_seq_len = jt_config.get('wm_seq_len', 64)
+            self.wm_layer_weights = config.get('model', {}).get(
+                'layer_weights', [1.0, 0.5, 0.1]
+            )
+            # If model config not in policy yaml, pull from worldmodel config
+            if 'model' not in config:
+                self.wm_layer_weights = self.world_model.config.layer_weights
+
+
         # Slow Target for Critic (EMA)
         self.slow_target = CriticMovingAverage(
             critic = self.critic, 
@@ -126,7 +157,72 @@ class ActorCriticTrainer:
         # Continue Loss - Bernoulli Dist
         self.Bernoulli = Bernoulli
         
+    def _train_world_model(
+        self,
+        num_steps : int = 1,
+    ) -> dict:
+        """
+        Train the (unfrozen) world model on sequences from the replay buffer.
         
+        Uses the SAME hierarchical loss as Phase 2 training (world_model_train.py).
+        Called inside the main training loop when joint_training.enabled = true.
+        """
+        self.world_model.train()
+
+        total_loss = 0.0
+        total_acc_l0 = 0.0
+        total_acc_l1 = 0.0
+        total_acc_l2 = 0.0
+        
+        for _ in range(num_steps):
+            
+            # Sample a sequence batch from the replay buffer
+            batch = self.replay_buffer.sample_wm_batch(
+                batch_size = self.wm_batch_size,
+                seq_len = self.wm_seq_len,
+            )
+            
+            tokens = batch['tokens']    # (B, L, 3) 
+            actions = batch['actions']  # (B, L)
+            
+            # Forward pass with AMP (matches Phase 2 training)
+            with autocast(device_type = self.device.type, enabled = self.wm_use_amp):
+                logits_l0, logits_l1, logits_l2 = self.world_model(tokens, actions)
+                
+                loss, metrics = hierarchical_loss(
+                    logits_l0 = logits_l0,
+                    logits_l1 = logits_l1,
+                    logits_l2 = logits_l2,
+                    tokens = tokens,
+                    layer_weights = self.wm_layer_weights,
+                )
+            
+            # Backward pass with GradScaler
+            self.wm_optimizer.zero_grad()
+            self.wm_scaler.scale(loss).backward()
+            self.wm_scaler.unscale_(self.wm_optimizer)
+            torch.nn.utils.clip_grad_norm_(
+                self.world_model.parameters(),
+                max_norm = self.wm_grad_clip,
+            )
+            self.wm_scaler.step(self.wm_optimizer)
+            self.wm_scaler.update()
+            
+            total_loss += metrics['loss_total']
+            total_acc_l0 += metrics['accuracy_l0']
+            total_acc_l1 += metrics['accuracy_l1']
+            total_acc_l2 += metrics['accuracy_l2']
+        
+        # Switch back to eval for imagination rollouts
+        self.world_model.eval()
+        
+        return {
+            'wm/loss': total_loss / num_steps,
+            'wm/acc_l0': total_acc_l0 / num_steps,
+            'wm/acc_l1': total_acc_l1 / num_steps,
+            'wm/acc_l2': total_acc_l2 / num_steps,
+        }
+    
     def _train_aux(
         self,
         num_batches : int = 1
@@ -450,15 +546,31 @@ class ActorCriticTrainer:
         prefill_steps : int = 0,
         offline_mode : bool = True,
     ):
-        """  MAIN TRAINING LOOP """
+        """  MAIN TRAINING LOOP 
+        
+        When JOINT TRAINING, world model unfreezes and gets gradient steps on the growing buffer"""
         
         """ SETUP """
-        # FREEZE MODELS
-        for model in [self.world_model, self.hrvq_tokenizer, self.encoder]:
+        joint_active = self.joint_training_enabled and not offline_mode
+
+        if joint_active:
+            # World model is TRAINABLE — keep it unfrozen
+            # (already unfrozen by load_frozen_models when joint_training.enabled)
+            print("  JOINT TRAINING: World model is UNFROZEN and will receive gradient updates")
+            print(f"  WM train ratio: {self.wm_train_ratio} steps per collect_interval")
+            print(f"  WM learning rate: {self.config['joint_training']['wm_lr']}")
+        else:
+            # FREEZE world model (standard offline mode)
+            self.world_model.eval()
+            for param in self.world_model.parameters():
+                param.requires_grad = False
+        
+        # HRVQ + Encoder are ALWAYS frozen
+        for model in [self.hrvq_tokenizer, self.encoder]:
             model.eval()
             for param in model.parameters():
                 param.requires_grad = False
-        
+
         os.makedirs(name = save_directory, exist_ok = True)
         policy_config = self.config['policy']
         
@@ -478,6 +590,8 @@ class ActorCriticTrainer:
                 self.collect_real_episode()
             print(f"  Buffer size: {len(self.replay_buffer)}")
         
+        wm_trainable = sum(p.numel() for p in self.world_model.parameters() if p.requires_grad)
+        
         print(f"STARTING POLICY TRAINING")
         print(f"  Parameters: {count_policy_params(
             critic=self.critic, actor=self.policy,
@@ -485,12 +599,14 @@ class ActorCriticTrainer:
             feature_extractor=self.feature_extractor
         )}")
         print()
+        print(f"  World model params: {wm_trainable:,} ({'TRAINABLE' if joint_active else 'FROZEN'})")
+        print()
         print(f"  Total steps: {total_steps}")
         print()
         print(f"  Horizon schedule: mode={policy_config.get('horizon_mode', 'decay')}  H=[{policy_config.get('min_horizon', 5)}, {policy_config.get('max_horizon', 30)}]")
         print()
         print(f"  Batch size: {policy_config['batch_size']}")
-        print(f"  Offline mode: {offline_mode}")
+        print(f"  Mode: {'JOINT (online + WM updates)' if joint_active else 'OFFLINE (frozen WM)' if offline_mode else 'ONLINE (frozen WM)'}")
         print()
         print(f"  Buffer size: {len(self.replay_buffer)}")
         print()
@@ -527,12 +643,22 @@ class ActorCriticTrainer:
                         'env/episode_length': episode_info['episode_length'],
                     } , step = step)
             
+            """ Joint Mode Training """
+            wm_metrics = {}
+
+            if joint_active and len(self.replay_buffer) >= self.wm_seq_len:
+                wm_metrics = self._train_world_model(
+                    num_steps = self.wm_train_ratio,
+                )
+            
             """ Train Aux Networks (REAL DATA)"""
             aux_metrics = self._train_aux(
                 num_batches = policy_config.get('aux_batches', 1),
             )
             
             """ Imagination Rollout (WORLD MODEL latent rollout)  """
+            self.world_model.eval()  # Ensure world model is in eval mode for imagination
+
             seed_context = self.replay_buffer.sample_seed_context(
                 batch_size = policy_config['batch_size'],
                 context_len = policy_config['seed_context_len']
@@ -552,21 +678,32 @@ class ActorCriticTrainer:
                 elapsed = time.time() - start_time
                 steps_per_second = (step + 1) / max(elapsed, 1)
                 
-                print(
+                # Build log string
+                log_str = (
                     f"Step {step:>6d}/{total_steps} | "
                     f"H={current_horizon} | "
-                    f"actor_loss={actor_critic_metrics['actor/loss']:.4f} | "
-                    f"critic_loss={actor_critic_metrics['critic/loss']:.4f} | "
-                    f"entropy={actor_critic_metrics['actor/entropy']:.3f} | "
-                    f"returns={actor_critic_metrics['returns/mean']:.3f} | "
-                    f"reward_loss={aux_metrics['aux/reward_loss']:.4f} | "
-                    f"sps={steps_per_second:.1f}"
+                    f"actor={actor_critic_metrics['actor/loss']:.4f} | "
+                    f"critic={actor_critic_metrics['critic/loss']:.4f} | "
+                    f"ent={actor_critic_metrics['actor/entropy']:.3f} | "
+                    f"ret={actor_critic_metrics['returns/mean']:.3f} | "
+                    f"rew_loss={aux_metrics['aux/reward_loss']:.4f}"
                 )
+                
+                # Append WM metrics if joint training
+                if wm_metrics:
+                    log_str += (
+                        f" | wm={wm_metrics['wm/loss']:.4f}"
+                        f" L0={wm_metrics['wm/acc_l0']:.3f}"
+                    )
+                
+                log_str += f" | sps={steps_per_second:.1f}"
+                print(log_str)
                 
                 if use_wandb:
                     metrics = {
                         **aux_metrics,
                         **actor_critic_metrics,
+                        **wm_metrics,                                   
                         'speed/sps': steps_per_second,
                         'horizon/current': current_horizon,
                     }

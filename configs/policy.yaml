@@ -70,7 +70,7 @@ joint_training:
 frozen_models:
   world_model: "checkpoints/world_model_40e.pt"      # REQUIRED keys: model_state_dict, epoch, ...
   hrvq_tokenizer: "checkpoints/rsvq_model_best.pth"  # REQUIRED raw state_dict (no wrapper dict)
-  encoder: "checkpoints/encoder_best_3games.pt"       # REQUIRED for online mode: model_state_dict, epoch, loss
+  encoder: "checkpoints/encoder_best_3games.pt"      # REQUIRED for online mode: model_state_dict, epoch, loss
 
 # DATA PATHS 
 data:

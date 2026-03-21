@@ -2,8 +2,8 @@
 TRAIN POLICY — Entry point for Hi-Dreamer actor-critic training.
 
 Usage:
-    python train_policy.py --config configs/policy.yaml --game Pong-v5
-    python train_policy.py --config configs/policy.yaml --offline  # no env needed
+    python policy_train.py --config configs/policy.yaml --offline       # no env needed
+    python policy_train.py --config configs/policy.yaml --game Pong-v5  # joint training (default)
 
 Requires pre-trained frozen models:
     - World model checkpoint
@@ -42,7 +42,7 @@ def parse_args():
     parser.add_argument("--game", type = str, default = None, help="Override game from config")
     parser.add_argument("--device", type = str, default = "cuda")
     parser.add_argument("--wandb", action = "store_true", default = False)
-    parser.add_argument("--offline", action = "store_true", default = False, help = "Force offline mode")
+    parser.add_argument("--offline", action = "store_true", default = False, help = "Force offline mode (FROZEN World Model)")
     parser.add_argument("--checkpoint", type = str, default = None, help = "Resume from checkpoint")
     parser.add_argument("--seed", type = int, default = 42)
     return parser.parse_args()
@@ -70,11 +70,13 @@ def load_offline_buffer(config: dict, game: str, device: torch.device) -> TokenR
 
 def load_frozen_models(
     config : dict,
-    device : torch.device
+    device : torch.device,
+    joint_training : bool = False,
 ):
-    """ LOAD and FREEZE all pre-trained models
-    
-    - World Model 
+    """ LOAD pre-trained models
+
+    JOINT TRAINING MODE: World Model TRAINABLE ,
+    - World Model
     - HRVQ Tokenizer
     - CNN Encoder
     """
@@ -88,18 +90,29 @@ def load_frozen_models(
     
     world_model_checkpoint = torch.load(paths['world_model'], map_location=device, weights_only=False)
     world_model.load_state_dict(world_model_checkpoint['model_state_dict'])
-    world_model.eval()
-    
-    # FREEZE
-    for p in world_model.parameters():
-        p.requires_grad = False
-    
+
     world_model_params = sum(p.numel() for p in world_model.parameters())
-    print(f"  World Model loaded with {world_model_params:,} parameters (FROZEN)")
-    print(f"  Loaded from epoch {world_model_checkpoint.get('epoch', '?')}, val_loss={world_model_checkpoint.get('best_val_loss', '?')}")
+
+    # CONDITIONAL FREEZING
+    if joint_training:
+        world_model.eval() # START IN EVAL
+        print(f"  World Model: {world_model_params:,} params (UNFROZEN for joint training)")
+        print(f"  Initialised from epoch {world_model_checkpoint.get('epoch', '?')}, "
+              f"val_loss={world_model_checkpoint.get('best_val_loss', '?')}")
     
+    else:
+        # FULLY FREEZE
+        world_model.eval()
+
+        for p in world_model.parameters():
+            p.requires_grad = False
+        
+        world_model_params = sum(p.numel() for p in world_model.parameters())
+        print(f"  World Model loaded with {world_model_params:,} parameters (FROZEN)")
+        print(f"  Loaded from epoch {world_model_checkpoint.get('epoch', '?')}, val_loss={world_model_checkpoint.get('best_val_loss', '?')}")
+        
     
-    # 2. HRVQ Tokenizer
+    # 2. HRVQ Tokenizer (ALWAYS FROZEN)
     print("\nLoading frozen HRVQ TOKENIZER...")
     hrvq = HRVQTokenizer(
         input_dim=384, num_codes_per_layer=256, num_layers=3,
@@ -109,12 +122,12 @@ def load_frozen_models(
     hrvq.load_state_dict(torch.load(paths['hrvq_tokenizer'], map_location=device, weights_only=False))
     hrvq.eval()
     
-    # FREEZE
+    # FREEZE 
     for p in hrvq.parameters():
         p.requires_grad = False
     print(f"  HRVQ Tokenizer loaded and FROZEN")
     
-    # 3. CNN Encoder
+    # 3. CNN Encoder (ALWAYS FROZEN)
     print("\nLoading frozen CNN ENCODER...")
     encoder = AtariCNNEncoder(input_channels=4, embedding_dim=384).to(device)
     
@@ -122,6 +135,8 @@ def load_frozen_models(
     encoder_checkpoint = torch.load(paths['encoder'], map_location=device, weights_only=False)
     encoder.load_state_dict(encoder_checkpoint['model_state_dict'])
     encoder.eval()
+
+    # FREEZE
     for p in encoder.parameters():
         p.requires_grad_(False)
     encoder_params = sum(p.numel() for p in encoder.parameters())
@@ -261,12 +276,18 @@ def main():
     print(f"OFFLINE TRAINING" if offline_mode else "ONLINE TRAINING") 
     print()
     
+    # JOIN TRAINING MODE
+    jt_config = config.get('joint_training', {})
+    joint_training = jt_config.get('enabled', False) and not offline_mode
+
     # LOAD FROZEN MODELS
     
     print(f"Loading FROZEN models... ")
     print()
     world_model, hrvq_tokenizer, cnn_encoder = load_frozen_models(
-        config = config, device = device
+        config = config, 
+        device = device,    
+        joint_training = joint_training,
     )
     print(f"FROZEN models loaded.")
     print()
@@ -283,7 +304,7 @@ def main():
     print(f"TRAINABLE networks built.")
     print()
     
-    # ENVIRONMENT (if not offline-only)
+    # ENVIRONMENT (required for both)
     env = None
     if not offline_mode:
         print(f"Building ENVIRONMENT (ALE)... ")
