@@ -1,3 +1,4 @@
+
 # HI-DREAMER POLICY TRAINING CONFIG
 # Hyperparameters justified by DreamerV3 (Hafner et al., Nature 2025) 
 # and TWISTER (Burchi & Timofte, ICLR 2025)
@@ -13,14 +14,9 @@ policy:
   
   # IMAGINATION
   horizon_mode: "decay"      # SWAP to compare: "flat" , "decay" , "bell"
-                             #   flat:  H=30 always          (baseline)
-                             #   decay: 30→5  cosine         (explore early, exploit late)
-                             #   bell:  5→30→5 cosine        (ramp up then compress)
-
   max_horizon: 30            # Upper bound of schedule (flat: constant H)
   min_horizon: 5             # Lower bound of schedule (flat: ignored)
   flat_horizon: 15           # If horizon_mode=flat, use this constant H
- 
   temperature: 1.0           # Sampling temperature during imagination
   seed_context_len: 16       # Timesteps of real context to seed imagination
   batch_size: 16             # Imagination batch size (limited by T4 VRAM)
@@ -30,9 +26,9 @@ policy:
   critic_lr: 3.0e-5             # DreamerV3 critic LR (same as actor in V3)
   aux_lr: 1.0e-4                # Reward/continue predictor LR (higher — supervised)
   aux_batch_size: 32            # Batch size for auxiliary supervised training (real data)
-  aux_max_norm : 100.0          # Gradient clipping for auxiliary losses (large to avoid instability)
-  actor_max_norm : 100.0        # Gradient clipping for actor (large to avoid instability)
-  critic_max_norm : 100.0       # Gradient clipping for critic (large to avoid instability)
+  aux_max_norm: 100.0           # Gradient clipping for auxiliary losses
+  actor_max_norm: 100.0         # Gradient clipping for actor
+  critic_max_norm: 100.0        # Gradient clipping for critic
   critic_slow_target_tau: 0.02  # EMA rate for slow critic target (DreamerV3)
 
   # λ-Returns (DreamerV3 Eq. 7) 
@@ -47,22 +43,34 @@ policy:
 
   # TRAINING LOOP
   total_steps: 200000        # Total imagination training steps
-  collect_interval: 1        # Collect real step every N training steps
+  collect_interval: 1        # Collect real episode every N training steps
   aux_batches: 1             # Auxiliary training batches per step
   eval_every: 10000          # Evaluate every N steps
   log_every: 100             # Log every N steps
   prefill_steps: 1000        # Random steps before training starts
   
-  # OFFLINE MODE
-  # If true, skip real env interaction and train purely from pre-collected buffer
-  # Useful when you already have 100K transitions per game from data collection
-  offline_mode: true
+  # OFFLINE MODE (for pure offline training with pre-collected data)
+  offline_mode: false         # NEW: Changed to false for joint training
+
+# NEW: JOINT TRAINING CONFIG — world model fine-tuning during policy training
+# Reference: DreamerV3 uses train_ratio=512 (gradient steps per env step)
+# IRIS uses ~1 WM update per token collected
+# We start conservatively (1-4 steps) due to T4 VRAM constraints
+joint_training:
+  enabled: true               # Master switch for joint WM training
+  wm_lr: 1.0e-4               # Lower than Phase 2 training (3e-4) — fine-tuning, not training from scratch
+  wm_weight_decay: 0.01       # Lighter regularization than Phase 2 (0.1)
+  wm_grad_clip: 1.0           # Same as Phase 2
+  wm_train_ratio: 1           # WM gradient steps per collect_interval (start low, increase if headroom)
+  wm_batch_size: 16           # Sequences per WM gradient step (T4 VRAM limited)
+  wm_seq_len: 64              # Sequence length for WM training batches
+  use_amp: true               # Mixed precision for WM training (T4 compatible)
 
 # FROZEN MODEL PATHS 
 frozen_models:
   world_model: "checkpoints/world_model_40e.pt"      # REQUIRED keys: model_state_dict, epoch, ...
   hrvq_tokenizer: "checkpoints/rsvq_model_best.pth"  # REQUIRED raw state_dict (no wrapper dict)
-  encoder: "checkpoints/encoder_best_3games.pt"      # OPTIONAL ONLINE keys: model_state_dict, epoch, loss
+  encoder: "checkpoints/encoder_best_3games.pt"       # REQUIRED for online mode: model_state_dict, epoch, loss
 
 # DATA PATHS 
 data:
