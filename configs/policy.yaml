@@ -37,7 +37,7 @@ policy:
   lambda: 0.95               # λ for GAE-style returns (DreamerV3 default)
   
   # REGULARIZATION
-  entropy_scale: 3.0e-4            # DreamerV3: 3e-4 for discrete actions
+  entropy_scale: 3.0e-3            # 10 x DreamerV3:  3e-4 for discrete actions
   ema_tau: 0.02                    # Slow target EMA rate (DreamerV3)
   return_normalizer_decay: 0.99    # Decay for return normalizer(DreamerV3)
   unimix: 0.01                     # Policy uniform mixture (DreamerV3: 1%)
@@ -48,7 +48,7 @@ policy:
   aux_batches: 1             # Auxiliary training batches per step
   eval_every: 5000           # Evaluate every N steps
   log_every: 100             # Log every N steps
-  prefill_steps: 1000        # Random steps before training starts
+  prefill_steps: 5000        # Random steps before training starts (1000 -> 5000 for better initial world model data)
   
   # OFFLINE MODE (for pure offline training with pre-collected data)
   offline_mode: false         # NEW: Changed to false for joint training

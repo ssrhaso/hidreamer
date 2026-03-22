@@ -353,8 +353,11 @@ class ActorCriticTrainer:
         self.policy.train()
         
         with torch.no_grad():
-            advantages = lambda_returns - slow_values
-            advantages = self.return_normalizer.normalize(advantages)
+            # NORMALIZED RETURNS AND ADVANTAGES (stability, DreamerV3)
+            normalized_returns = self.return_normalizer.normalize(lambda_returns)
+            normalized_values = self.return_normalizer.normalize(slow_values)
+            
+            advantages = normalized_returns - normalized_values
             
         # REINFORCE Loss
         actor_loss = -(trajectory.log_probs * advantages.detach()).mean()
