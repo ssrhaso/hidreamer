@@ -5,7 +5,7 @@
 
 policy:
   # ARCHITECTURE
-  feature_mode: "concat"     # "concat" (1152D, Option A) or "attention" (384D, Option C)
+  feature_mode: "hidden_state" # "hidden_state" vs "concat"
   hidden_dim: 512            # MLP width for actor/critic (DreamerV3: 512)
   
   # ENV
@@ -44,7 +44,7 @@ policy:
 
   # TRAINING LOOP
   total_steps: 100000        # Total imagination training steps
-  collect_interval: 99       # Collect real episode every N training steps, 1 episode every 99 steps (approx. 2 episode per 100 steps)
+  collect_interval: 500      # 500 = 1:1 train:collect ratio with 500 env steps per imagination step
   aux_batches: 1             # Auxiliary training batches per step
   eval_every: 5000           # Evaluate every N steps
   log_every: 100             # Log every N steps
@@ -58,7 +58,7 @@ policy:
 # IRIS uses ~1 WM update per token collected
 # We start conservatively (1-4 steps) due to T4 VRAM constraints
 joint_training:
-  enabled: true               # Master switch for joint WM training
+  enabled: false              # Master switch for joint WM training
   wm_lr: 1.0e-4               # Lower than Phase 2 training (3e-4) — fine-tuning, not training from scratch
   wm_weight_decay: 0.01       # Lighter regularization than Phase 2 (0.1)
   wm_grad_clip: 1.0           # Same as Phase 2
