@@ -141,8 +141,49 @@ class HierarchicalFeatureExtractor(nn.Module):
         
         return feat
     
+
+class HiddenStateFeatureExtractor(nn.Module):
+    """ EXTRACTS POLICY FEATURES from FROZEN TRANSFORMER hidden states 
+    
+    Replaces CODEBOOK LOOKUP with direct use of the world model hidden stats 
+    """      
+    
+    def __init__(
+        self,
+        d_model : int = 384,          # DIMENSION OF TRANSFORMER HIDDEN STATES
+        use_projection : bool = True, # WHETHER TO PROJECT HIDDEN STATES TO A LOWER DIMENSION
+    ):
+        super().__init__()
+        self.d_model = d_model
+        self.use_projection = use_projection
+        self.feat_dim = d_model * 3 # 1152D (same as codebook concat)
         
+        # IF PROJECTION (Lets policy network adapt to frozen WM representation)
+        self.projection = nn.Sequential(
+            nn.LayerNorm(normalized_shape = self.feat_dim),
+            nn.Linear(in_features = self.feat_dim, out_features = self.feat_dim),
+            nn.SiLU(),
+        )
+        
+    def forward(
+        self,
+        hidden_states : torch.Tensor, # (B, 3, d_model) HIDDEN STATES FROM TRANSFORMER
+    ) -> torch.Tensor:
+        """ Forward Pass """
+        
+        if hidden_states.dim() == 3:
+            # (B, 3, 384) -> (B, 1152) CONCATENATE HIDDEN STATES
+            feat = hidden_states.reshape(shape = (hidden_states.size(0), -1))
             
+        else:
+            feat = hidden_states # ASSUME ALREADY CONCATENATED (B, 1152)
+        
+        if self.use_projection:
+            feat = self.projection(feat) # PROJECTED FEATURES (B, 1152)
+        
+        return feat
+            
+
 class ActorNetwork(nn.Module):
     """ The Actor. 
     
