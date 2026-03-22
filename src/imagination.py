@@ -216,7 +216,9 @@ class ImagineRollout:
         # Action=0 placeholder will be popped and re-done at next horizon step.
         new_cached_len = cached_len_after_step0 + 4
         
-        return predicted_tokens, kv_cache_final, new_cached_len
+        next_hidden = x_pass3[:, :3, :] # (B, 3, d_model) - L0, L1, L2 POSITIONS for new timestep
+        
+        return predicted_tokens, kv_cache_final, new_cached_len, next_hidden
 
 
     # ROLLOUT ENTRY POINT
@@ -250,6 +252,7 @@ class ImagineRollout:
         tokens_context = seed_tokens.clone()
         actions_context = seed_actions.clone()
         
+        # ALLOCATE STORAGE FOR ROLLOUT TRAJECTORY
         traj_tokens     = torch.zeros(batch_size, H, 3, dtype=torch.long, device=self.device)
         traj_actions    = torch.zeros(batch_size, H, dtype=torch.long, device=self.device)
         traj_log_probs  = torch.zeros(batch_size, H, dtype=torch.float, device=self.device)
@@ -260,29 +263,53 @@ class ImagineRollout:
         traj_continues  = torch.zeros(batch_size, H, dtype=torch.float, device=self.device)
         
         for h in range(H):
-            current_tokens = tokens_context[:, -1, :]
-            feature = self.feature_extractor(current_tokens)
             
+            # FULL FORWARD TO GET HIDDEN STATES 
+            x = self.world_model.embedding(
+                tokens_context, actions_context
+            )
+            
+            mask = self.world_model._get_mask(
+                x.size(1), 
+                x.device
+            )
+            
+            for block in self.world_model.blocks:
+                x = block(x, mask = mask)
+            
+            x = self.world_model.ln_final(x)
+            
+            # EXTRACT HIDDEN STATE for LAST timestep's L0, L1 and L2 positions
+            
+            t_current = tokens_context.size(1)
+            last_start = (t_current - 1) * 4
+            current_hidden = x[:, last_start:last_start+3, :]  # (B, 3, d_model)
+            
+            feature = self.feature_extractor(current_hidden)
+            
+            # ACTOR PICKS ACTION  - from feature
             distribution = self.actor_network(feature)
             action = distribution.sample()
             log_probs = distribution.log_prob(action)
             entropy = distribution.entropy()
             
+            # CRITIC, REWARD, CONTINUE Predictions (no grad)
             with torch.no_grad():
                 value = self.critic_network(feature)
                 reward = self.reward_network(feature)
                 continue_logit = self.continue_network(feature)
                 continue_prob = torch.sigmoid(continue_logit)
-            
+                
             actions_context[:, -1] = action
             next_tokens = self._cascade_predict_next(tokens_context, actions_context)
             
             tokens_context = torch.cat([tokens_context, next_tokens.unsqueeze(1)], dim=1)
             actions_context = torch.cat([
-                actions_context, 
-                torch.zeros(batch_size, 1, dtype=torch.long, device=self.device)
-            ], dim=1)
+                actions_context,
+                torch.zeros(batch_size, 1, dtype = torch.long, device = self.device)
+            ], dim = 1)
             
+            # STORE TRAJECTORY STEP
             traj_tokens[:, h] = next_tokens
             traj_actions[:, h] = action
             traj_log_probs[:, h] = log_probs
@@ -292,10 +319,21 @@ class ImagineRollout:
             traj_rewards[:, h] = reward
             traj_continues[:, h] = continue_prob
         
-        with torch.no_grad():
-            final_feature = self.feature_extractor(tokens_context[:, -1, :])
-            last_value = self.critic_network(final_feature)
+        # BOOTSTRAP VALUES
+        x = self.world_model.embedding(tokens_context, actions_context)
+        mask = self.world_model._get_mask(x.size(1), x.device)
         
+        for block in self.world_model.blocks:
+            x = block(x, mask = mask)
+        
+        x = self.world_model.ln_final(x)
+        t_final = tokens_context.size(1)
+        last_start = (t_final - 1) * 4
+        final_hidden = x[:, last_start:last_start+3, :]
+        final_feature = self.feature_extractor(final_hidden)
+        last_value = self.critic_network(final_feature)
+        
+        # RETURN TRAJECTORY
         return Trajectory(
             tokens=traj_tokens, actions=traj_actions,
             log_probs=traj_log_probs, feats=torch.stack(traj_features, dim=1),
@@ -310,12 +348,11 @@ class ImagineRollout:
         seed_actions : torch.Tensor,
         horizon : Optional[int] = None,
     ) -> Trajectory:
-        """KV-CACHED rollout — 3 incremental forwards per step.
+        """KV-CACHED rollout - WITH TRANSFORMER HIDDEN STATE FEATURES
         
-        Per horizon step:
-        1. Extract features → actor selects action
-        2. _do_cached_cascade: pop+redo with action, then L0→L1→L2 incrementally
-        3. Cache grows by 4 positions
+         FEATURES COME FROM TRANSFORMER HIDDEN STATES, NOT SEPARATE MLP ENCODER.
+         
+         (positions L0, L1, L2 after ln_final) instead of codebook embeddings = richer
         """
         
         batch_size = seed_tokens.size(0)
@@ -325,9 +362,23 @@ class ImagineRollout:
         max_timesteps = self.world_model.config.max_seq_len // 4
         assert t_seed + H <= max_timesteps
         
-        #  PHASE 1: Prime KV cache with seed context 
-        _, _, _, kv_cache = self.world_model.forward_with_kv(seed_tokens, seed_actions)
+        #  PHASE 1: Prime KV cache with seed context  + extract initial hidden stats 
+        
+        
+        _, _, _, kv_cache, x_full = self.world_model.forward_with_kv(
+            seed_tokens, seed_actions
+        )
+        
         cached_seq_len = t_seed * 4
+        
+        # EXTRACT HIDDEN STATES FOR LAST SEED TIMESTEP (pos L0, L1, L2)
+        # x_full is (B, t_seed*4, d_model) - we want the last 3 positions for the new timestep
+        next_hidden = x_full[:, -3:, :]  # (B, 3, d_model)
+
+        last_t_start = (t_seed - 1) * 4
+        current_hidden = x_full[:, last_t_start:last_t_start+3, :]  # (B, 3, d_model)
+        
+        # ALLOCATE STORAGE FOR ROLLOUT TRAJECTORY
         
         traj_tokens     = torch.zeros(batch_size, H, 3, dtype=torch.long, device=self.device)
         traj_actions    = torch.zeros(batch_size, H, dtype=torch.long, device=self.device)
@@ -343,13 +394,17 @@ class ImagineRollout:
         #  PHASE 2: Imagination rollout 
         for h in range(H):
             
-            current_tokens = last_cached_tokens[:, 0, :]
-            feature = self.feature_extractor(current_tokens)
+            # FEATURE FROM Transformer Hidden State (not  codebook lookup)
             
+            feature = self.feature_extractor(current_hidden)    # B, 1152
+            
+            # ACTOR PICKS ACTION  - from feature
             distribution = self.actor_network(feature)
             action = distribution.sample()
             log_probs = distribution.log_prob(action)
             entropy = distribution.entropy()
+            
+            # CRITIC, REWARD, CONTINUE Predictions (no grad)
             
             with torch.no_grad():
                 value = self.critic_network(feature)
@@ -357,16 +412,24 @@ class ImagineRollout:
                 continue_logit = self.continue_network(feature)
                 continue_prob = torch.sigmoid(continue_logit)
             
-            with torch.no_grad():
-                predicted_tokens, kv_cache, cached_seq_len = self._do_cached_cascade(
-                    kv_cache=kv_cache,
-                    cached_seq_len=cached_seq_len,
-                    action=action,
-                    prev_tokens=last_cached_tokens,
-                    prev_action_placeholder=(h > 0),
-                )
+            # CASCADE PREDICTION (return hidden states , not just tokens) - with cache. 
+            # L0 predicted from action, then L1 from L0, then L2 from L1, each via incremental forward.
             
-            last_cached_tokens = predicted_tokens.unsqueeze(1)
+            with torch.no_grad():
+                predicted_tokens, kv_cache, cached_seq_len, next_hidden = \
+                    self._do_cached_cascade(
+                        kv_cache = kv_cache,
+                        cached_seq_len = cached_seq_len,
+                        action = action,
+                        prev_tokens = last_cached_tokens,
+                        prev_action_placeholder = (h > 0),  # pop+redo from step0 if not first step
+                    )
+            
+            # UPDATE STEP for next iteration
+            last_cached_tokens = predicted_tokens.unsqueeze(1)  # (B, 1, 3)
+            current_hidden = next_hidden  # (B, 3, d_model)
+            
+            # STORE TRAJECTORY STEP
             
             traj_tokens[:, h] = predicted_tokens
             traj_actions[:, h] = action
@@ -377,8 +440,8 @@ class ImagineRollout:
             traj_rewards[:, h] = reward
             traj_continues[:, h] = continue_prob
         
-        #  PHASE 3: Bootstrap 
-        final_feature = self.feature_extractor(last_cached_tokens[:, 0, :])
+        #  BOOTSTRAP VALUES
+        final_feature = self.feature_extractor(current_hidden)
         last_value = self.critic_network(final_feature)
         
         return Trajectory(
