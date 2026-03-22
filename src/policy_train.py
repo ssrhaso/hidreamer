@@ -27,7 +27,7 @@ from encoder_v1 import AtariCNNEncoder
 
 from policy import (
     ActorNetwork, CriticNetwork, RewardNetwork, ContinueNetwork,
-    HierarchicalFeatureExtractor, count_policy_params,
+    HierarchicalFeatureExtractor, HiddenStateFeatureExtractor,count_policy_params,
 )
 from imagination import ImagineRollout
 from replay_buffer import TokenReplayBuffer
@@ -190,15 +190,24 @@ def build_trainable_networks(
     """
     
     policy_config = config['policy']
-    mode = policy_config.get('feature_mode', 'concat')
+    mode = policy_config.get('feature_mode', 'hidden_state')    
     
-    # 1. FEATURE EXTRACTOR (Frozen HRVQ codebooks)
-    feature_extractor = HierarchicalFeatureExtractor(
-        hrvq_tokenizer = hrvq,
-        mode = mode,
-        d_model = 384,
-    ).to(device)
+    # 1. HIDDEN STATE FEATURE EXTRACTOR
+    if mode == 'hidden_state':
+        feature_extractor = HiddenStateFeatureExtractor(
+            d_model = 384,
+            use_projection = True,
+        ).to(device)
     
+    else: 
+        # ARCHIVE FEATURE EXTRACTOR (Frozen HRVQ codebooks)
+        feature_extractor = HierarchicalFeatureExtractor(
+            hrvq_tokenizer = hrvq,
+            mode = mode,
+            d_model = 384,
+        ).to(device)
+    
+   
     # EXTRACT
     feat_dim = feature_extractor.feat_dim
     hidden_dim = policy_config.get('hidden_dim', 512)
