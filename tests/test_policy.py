@@ -302,11 +302,11 @@ class TestFeatureExtractor:
             d_model=64,
             use_projection=True,
         ).to(device)
-        tokens = torch.randint(0, 256, (4, 3), device=device)
-        out = feat_ext(tokens)
+        hidden = torch.randn(4, 3, 64, device=device)  # (B, 3, d_model) float hidden states
+        out = feat_ext(hidden)
         assert out.shape == (4, 192), f"Expected (4, 192), got {out.shape}"
 
-    def test_concat_has_no_trainable_params(self, tiny_hrvq, device):
+    def test_hidden_state_has_trainable_projection(self, tiny_hrvq, device):
         from policy import HiddenStateFeatureExtractor
         
         feat_ext = HiddenStateFeatureExtractor(
@@ -314,8 +314,8 @@ class TestFeatureExtractor:
             use_projection=True,
         ).to(device)
         trainable = sum(p.numel() for p in feat_ext.parameters() if p.requires_grad)
-        assert trainable == 0, (
-            f"Concat mode should have 0 trainable params, got {trainable}"
+        assert trainable > 0, (
+            f"HiddenStateFeatureExtractor with projection should have trainable params, got {trainable}"
         )
 
     def test_feat_dim_property_matches_output(self, tiny_hrvq, device):
@@ -325,8 +325,8 @@ class TestFeatureExtractor:
             d_model=64,
             use_projection=True,
         ).to(device)
-        tokens = torch.randint(0, 256, (2, 3), device=device)
-        out = feat_ext(tokens)
+        hidden = torch.randn(2, 3, 64, device=device)  # (B, 3, d_model) float hidden states
+        out = feat_ext(hidden)
         assert out.shape[-1] == feat_ext.feat_dim
 
 
