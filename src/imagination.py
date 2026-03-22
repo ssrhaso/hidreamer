@@ -32,6 +32,7 @@ class Trajectory:
     continues : torch.tensor        # (B, H)            - CONTINUE LOGITS AT EACH STEP
     last_value : torch.tensor       # (B,)              - VALUE PREDICTION FOR LAST STATE TO BOOTSTRAP FROM
     entropies : torch.tensor        # (B, H)            - ENTROPY OF POLICY AT EACH STEP
+    last_feat : torch.tensor        # (B, feat_dim)     - FEATURE OF LAST STATE (for bootstrapping)
 
 
 class ImagineRollout:
@@ -340,6 +341,7 @@ class ImagineRollout:
             values=traj_values, rewards=traj_rewards,
             continues=traj_continues, last_value=last_value,
             entropies=traj_entropies,
+            last_feat=final_feature,
         )
     
     def _rollout_cached(
@@ -450,4 +452,5 @@ class ImagineRollout:
             values=traj_values, rewards=traj_rewards,
             continues=traj_continues, last_value=last_value,
             entropies=traj_entropies,
+            last_feat=final_feature,
         )

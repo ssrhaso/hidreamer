@@ -332,9 +332,8 @@ class ActorCriticTrainer:
             feats_flat = trajectory.feats.reshape(B * H, feat_dim)       # (B*H, feat_dim)
             slow_values = self.slow_target(feats_flat).reshape(B, H)     # (B, H)
             
-            # Bootstrap value for last state
-            last_feat = self.feature_extractor(trajectory.tokens[:, -1])  # (B, feat_dim)
-            slow_last = self.slow_target(last_feat)                       # (B,)
+            # Bootstrap value for last state in trajectory
+            slow_last = self.slow_target(trajectory.last_feat)                       # (B,)
         
         # CONVERT REWARDS from SymLog space -> real space for λ returns
         rewards_real = symexp(trajectory.rewards)  # (B, H)
@@ -459,6 +458,9 @@ class ActorCriticTrainer:
         episode_length = 0
         done = False
         
+        token_history = []
+        action_history = []
+        
         # INTERACTION LOOP
         while not done:
             
@@ -468,14 +470,17 @@ class ActorCriticTrainer:
                 # ENCODE OBSERVATION TO HRVQ TOKENS (28224 raw values -> 3 discrete tokens)
                 tokens = self._encode_observation(obs)                      # (3, ) [L0, L1, L2] 
             
-                # DENSE FLOAT VECTOR (3 tokens -> 512 dim feature vector) for policy input
-                features = self.feature_extractor(tokens.unsqueeze(0))      # (1, feature_dim ) 
+                # FEATURE EXTRACTION
+                features, token_history, action_history = self._get_online_features(
+                    tokens, action_history, token_history
+                )
             
                 distribution = self.policy(features)    #  logits
                 action = distribution.sample().item()   #  sampled action index
             
             # STEP ENV
             next_obs, reward, terminated, truncated, _ = self.env.step(action)
+            action_history.append(action)
             done = terminated or truncated
             
             # PUSH TO BUFFER
@@ -523,13 +528,19 @@ class ActorCriticTrainer:
             episode_length = 0
             done = False
             
+            action_history = []
+            token_history = []
+            
             # INTERACTION LOOP
             while not done:
                 # ENCODE OBSERVATION TO HRVQ TOKENS (28224 raw values -> 3 discrete tokens)
                 tokens = self._encode_observation(obs)                      # (3, ) [L0, L1, L2] 
             
                 # DENSE FLOAT VECTOR (3 tokens -> 512 dim feature vector) for policy input
-                features = self.feature_extractor(tokens.unsqueeze(0))      # (1, feature_dim ) 
+                features, token_history, action_history = self._get_online_features(
+                    tokens, action_history, token_history
+                )
+                
                 
                 # GREEDY ACTION SELECTION (for evaluation)
                 distribution = self.policy(features)                  #  prob logits
@@ -537,6 +548,7 @@ class ActorCriticTrainer:
                 
                 # STEP ENV and ACCUMULATE
                 next_obs, reward, terminated, truncated, _ = self.env.step(action)
+                action_history.append(action)
                 done = terminated or truncated
                 episode_return += reward
                 episode_length += 1
@@ -805,3 +817,38 @@ class ActorCriticTrainer:
             artifact.add_file(path)
             wandb.log_artifact(artifact)
         print(f"    Saved Checkpoint: {path}")
+    
+    def _get_online_features(self, tokens, action_history, token_history):
+        """Get hidden-state features for online mode by running WM on recent context."""
+        # Append current tokens to history
+        token_history.append(tokens.cpu())
+        
+        # Keep last seed_context_len timesteps
+        max_ctx = self.config['policy']['seed_context_len']
+        if len(token_history) > max_ctx:
+            token_history = token_history[-max_ctx:]
+            action_history = action_history[-max_ctx:]
+        
+        # Pad actions to match tokens length (last action unknown, use 0)
+        while len(action_history) < len(token_history):
+            action_history.append(0)
+        
+        # Build tensors
+        ctx_tokens = torch.stack(token_history).unsqueeze(0).to(self.device)   # (1, T, 3)
+        ctx_actions = torch.tensor(action_history).unsqueeze(0).to(self.device) # (1, T)
+        
+        # Run frozen WM forward
+        with torch.no_grad():
+            x = self.world_model.embedding(ctx_tokens, ctx_actions)
+            mask = self.world_model._get_mask(x.size(1), x.device)
+            for block in self.world_model.blocks:
+                x = block(x, mask=mask)
+            x = self.world_model.ln_final(x)
+            
+            # Extract last timestep's L0, L1, L2 hidden states
+            t = ctx_tokens.size(1)
+            last_start = (t - 1) * 4
+            hidden = x[:, last_start:last_start+3, :]  # (1, 3, 384)
+            
+        feature = self.feature_extractor(hidden)  # (1, 1152)
+        return feature, token_history, action_history
