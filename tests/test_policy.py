@@ -78,8 +78,11 @@ def tiny_hrvq(device):
 @pytest.fixture(scope="module")
 def tiny_policy_networks(tiny_hrvq, device):
     """All trainable policy networks with consistent dimensions."""
-    feat_ext = HierarchicalFeatureExtractor(
-        hrvq_tokenizer=tiny_hrvq, mode="concat", d_model=64,
+    from policy import HiddenStateFeatureExtractor
+
+    feat_ext = HiddenStateFeatureExtractor(
+        d_model=64,           # match tiny_config.d_model
+        use_projection=True,
     ).to(device)
     feat_dim = feat_ext.feat_dim  # 64 * 3 = 192
 
@@ -293,16 +296,22 @@ class TestCountPolicyParams:
 class TestFeatureExtractor:
 
     def test_concat_output_shape(self, tiny_hrvq, device):
-        feat_ext = HierarchicalFeatureExtractor(
-            hrvq_tokenizer=tiny_hrvq, mode="concat", d_model=64,
+        from policy import HiddenStateFeatureExtractor
+
+        feat_ext = HiddenStateFeatureExtractor(
+            d_model=64,
+            use_projection=True,
         ).to(device)
         tokens = torch.randint(0, 256, (4, 3), device=device)
         out = feat_ext(tokens)
         assert out.shape == (4, 192), f"Expected (4, 192), got {out.shape}"
 
     def test_concat_has_no_trainable_params(self, tiny_hrvq, device):
-        feat_ext = HierarchicalFeatureExtractor(
-            hrvq_tokenizer=tiny_hrvq, mode="concat", d_model=64,
+        from policy import HiddenStateFeatureExtractor
+        
+        feat_ext = HiddenStateFeatureExtractor(
+            d_model=64,
+            use_projection=True,
         ).to(device)
         trainable = sum(p.numel() for p in feat_ext.parameters() if p.requires_grad)
         assert trainable == 0, (
@@ -310,8 +319,11 @@ class TestFeatureExtractor:
         )
 
     def test_feat_dim_property_matches_output(self, tiny_hrvq, device):
-        feat_ext = HierarchicalFeatureExtractor(
-            hrvq_tokenizer=tiny_hrvq, mode="concat", d_model=64,
+        from policy import HiddenStateFeatureExtractor
+
+        feat_ext = HiddenStateFeatureExtractor(
+            d_model=64,
+            use_projection=True,
         ).to(device)
         tokens = torch.randint(0, 256, (2, 3), device=device)
         out = feat_ext(tokens)
@@ -475,15 +487,14 @@ class TestActorCriticGradientFlow:
         B, H = 4, 5
         feat_dim = feat_ext.feat_dim
 
-        # Build a fake trajectory
-        traj_tokens = torch.randint(0, 256, (B, H, 3), device=device)
+        # Simulate hidden states from transformer (not token indices)
+        fake_hidden = torch.randn(B, H, 3, feat_ext.d_model, device=device)
 
-        # Compute features and actor outputs WITH grad
         feats_list = []
         log_probs_list = []
         entropies_list = []
         for h in range(H):
-            f = feat_ext(traj_tokens[:, h])
+            f = feat_ext(fake_hidden[:, h])  # (B, 3, 64) → (B, 192)
             dist = actor(f)
             a = dist.sample()
             feats_list.append(f)
