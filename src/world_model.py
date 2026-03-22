@@ -672,7 +672,7 @@ class HierarchicalWorldModel(nn.Module):
         logits_l1 = self.headl1(l0_positions)
         logits_l2 = self.headl2(l1_positions)
         
-        return logits_l0, logits_l1, logits_l2, kv_cache
+        return logits_l0, logits_l1, logits_l2, kv_cache, x # RETURN FULL HIDDEN STATES 
     
     def forward_incremental(
         self,

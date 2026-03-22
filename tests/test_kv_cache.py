@@ -44,7 +44,7 @@ def test_forward_with_kv_matches_forward(model_and_data):
     
     with torch.no_grad():
         l0_orig, l1_orig, l2_orig = model(tokens, actions)
-        l0_kv, l1_kv, l2_kv, kv_cache = model.forward_with_kv(tokens, actions)
+        l0_kv, l1_kv, l2_kv, kv_cache, x_hidden = model.forward_with_kv(tokens, actions)
     
     assert torch.allclose(l0_orig, l0_kv, atol=1e-5), \
         f"L0 logits differ! Max diff: {(l0_orig - l0_kv).abs().max():.6f}"
@@ -71,7 +71,7 @@ def test_forward_incremental_matches_forward(model_and_data, tiny_config):
         l0_full, l1_full, l2_full = model(tokens, actions)
         
         # KV-cached: prefix then incremental
-        _, _, _, kv_cache = model.forward_with_kv(tokens_prefix, actions_prefix)
+        _, _, _, kv_cache, x_hidden = model.forward_with_kv(tokens_prefix, actions_prefix)
         prefix_seq_len = (T - 1) * 4
         
         x_new, _ = model.forward_incremental(
@@ -99,7 +99,7 @@ def test_kv_cache_shapes(model_and_data, tiny_config):
     B, T = tokens.shape[:2]
     
     with torch.no_grad():
-        _, _, _, kv_cache = model.forward_with_kv(tokens, actions)
+        _, _, _, kv_cache, x_hidden = model.forward_with_kv(tokens, actions)
     
     assert len(kv_cache) == tiny_config.n_layers
     
@@ -121,7 +121,7 @@ def test_incremental_extends_cache(model_and_data, tiny_config):
     B, T = tokens.shape[:2]
     
     with torch.no_grad():
-        _, _, _, kv_cache = model.forward_with_kv(tokens[:, :-1, :], actions[:, :-1])
+        _, _, _, kv_cache, x_hidden = model.forward_with_kv(tokens[:, :-1, :], actions[:, :-1])
         prefix_len = (T - 1) * 4
         
         _, updated_cache = model.forward_incremental(
@@ -189,7 +189,7 @@ def test_no_nan_inf_in_cached_outputs(model_and_data):
     model, tokens, actions = model_and_data
     
     with torch.no_grad():
-        l0, l1, l2, kv_cache = model.forward_with_kv(tokens, actions)
+        l0, l1, l2, kv_cache, x_hidden = model.forward_with_kv(tokens, actions)
     
     for name, t in [("l0", l0), ("l1", l1), ("l2", l2)]:
         assert not torch.isnan(t).any(), f"NaN in {name} logits"
