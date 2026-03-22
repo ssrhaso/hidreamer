@@ -253,10 +253,28 @@ class ActorCriticTrainer:
             
             # FEATURE EXTRACTION (for each timestep)
             B, L, _ = tokens.shape
-            tokens_flat = tokens.reshape(B * L, 3)           # (B*L, 3)           (2048, 3)
+            
+            actions = batch['actions']         # (B, L)    (32, 64)
             
             with torch.no_grad():
-                features = self.feature_extractor(tokens_flat)   # (B*L, feature_dim) (2048, 512)
+                # RUN FROZEN WM FOR HIDDEN STATES
+                
+                x = self.world_model.embedding(tokens, actions)  # (B, L*4, d_model)
+                mask = self.world_model._get_mask(x.size(1), x.device)
+                
+                for block in self.world_model.blocks:
+                    x = block(x, mask = mask)
+                
+                x = self.world_model.ln_final(x)  # (B, L*4, d_model)
+            
+            # EXTRACT L0, L1, L2 position hidden states per timestep:
+            h_l0 = x[:, 0::4, :]   # (B, L, d_model) - Every 4th token, starting at 0
+            h_l1 = x[:, 1::4, :]   # (B, L, d_model) - Every 4th token, starting at 1
+            h_l2 = x[:, 2::4, :]   # (B, L, d_model) - Every 4th token, starting at 2
+            
+            # CONCAT to match feature format (imagination)
+            hidden_states = torch.cat([h_l0, h_l1, h_l2], dim = -1)  # (B, L, d_model*3)
+            features = self.feature_extractor(hidden_states.reshape(B * L, -1))  # (B, L, feature_dim)
             
             # CONTINUE NETWORK LOSS (Bernoulli) - Binary Classification 
             continue_logits = self.continue_network(features).squeeze(-1)       # (B*L) , raw logits
