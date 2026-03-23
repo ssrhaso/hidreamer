@@ -1,0 +1,87 @@
+# SPATIAL ENCODER TRAINING CONFIG
+# Trains SpatialAtariEncoder (encoder_v2.py) + SpatialHRVQTokenizer (vq_spatial.py)
+#
+# COLLAPSE PROBLEM: Pong frames are ~90% black background.
+# Plain MSE on embeddings → encoder learns "always output background embedding" → loss=0.
+# THREE FIXES APPLIED:
+#   1. Foreground-weighted pixel aux loss  — forces patch embeddings to carry brightness info
+#   2. Codebook entropy diversity penalty  — penalises codebook collapse
+#   3. K-means codebook initialisation    — breaks the initial symmetry
+
+model:
+  d_model: 384              # Patch embedding dimension (must match HRVQ codebook dim)
+  input_channels: 4         # Stacked grayscale frames (Mnih et al., Nature 2015)
+
+tokenizer:
+  # Per-level codebook sizes — matched to the number of patches:
+  #   L0: 4 patches/frame  → 16 codes  (16^4 = 65k frame states)
+  #   L1: 16 patches/frame → 64 codes  (64^16 ≈ 10^29 frame states)
+  #   L2: 16 patches/frame → 64 codes
+  # 256 codes per level was absurd relative to patch count and caused collapse.
+  num_codes_l0: 16
+  num_codes_l1: 64
+  num_codes_l2: 64
+  # Higher than VQ-VAE default (0.25) because GradientVQ needs harder commitment
+  # pressure to prevent the encoder drifting while the codebook chases it.
+  # van den Oord et al., "Neural Discrete Representation Learning", NeurIPS 2017.
+  commitment_costs: [0.25, 0.5, 1.0]   # [l0, l1, l2] — higher = stronger anti-collapse
+  decay: 0.99               # EMA decay for codebook update (unused when use_gradient_vq=true)
+  epsilon: 1.0e-5           # EMA numerical stability (unused when use_gradient_vq=true)
+
+# Reconstruction loss weights per spatial level (commitment MSE)
+loss:
+  l0_weight: 1.0            # Coarse patches (2×2) — highest weight because L0 encodes the most
+  l1_weight: 0.7            # Mid patches (4×4)    # salient Pong state (ball/paddle quadrant)
+  l2_weight: 0.5            # Fine patches (4×4)
+
+  # Foreground-weighted pixel auxiliary loss
+  # A small linear head (training-only, discarded afterwards) predicts the mean
+  # pixel brightness of each spatial patch. This is the key signal that forces
+  # the encoder to produce DIFFERENT embeddings for foreground vs background patches.
+  pixel_aux_weight: 5.0     # Weight of pixel aux loss (relative to commitment MSE)
+  fg_boost: 50.0            # Extra weight on patches with foreground pixels (>threshold)
+  fg_threshold: 0.1         # Pixel value [0,1] above which a pixel is "foreground"
+
+  # Codebook entropy diversity penalty
+  # Penalises low entropy of soft codebook assignments over each batch.
+  # Drives the model to use more of the codebook.
+  # Related to VQGAN codebook utilisation techniques (Esser et al., CVPR 2021).
+  diversity_weight: 0.1     # Weight of (1 - normalised_entropy) penalty
+  diversity_temp: 0.05      # Near-hard softmax temp — only rewards genuinely distinct code usage
+
+# K-means codebook initialisation
+# Before epoch 1, collect encoder outputs from init_batches random batches
+# and use a random subset as initial codebook entries.
+# Puts the codebook in the right neighbourhood from step 0, avoiding the cold-start
+# period where all codes are equidistant. (Razavi et al., VQ-VAE-2, NeurIPS 2019)
+kmeans_init:
+  enabled: true
+  init_batches: 100         # Batches to collect embeddings from (×batch_size frames)
+
+training:
+  seed: 0
+  batch_size: 32            # Reduced from 64 to avoid OOM at epoch 14 on T4 (16 GB)
+  num_epochs: 30
+  learning_rate: 3.0e-4
+  weight_decay: 0.01        # AdamW decoupled weight decay (Loshchilov & Hutter, ICLR 2019)
+  grad_clip: 1.0            # L2 gradient clip — important with GradientVQ; codebook grad can spike on collapse
+  warmup_steps: 500         # Short warmup safe because k-means init already seeds codebook
+  betas: [0.9, 0.999]
+  mixed_precision: true     # float16 AMP on T4 (Micikevicius et al., ICLR 2018)
+  use_gradient_vq: true     # GradientVQ: active codebook gradient updates vs EMA (van den Oord et al. 2017)
+  patch_diversity_weight: 0.1
+  entropy_weight: 1.0
+
+  val_split: 0.05
+  eval_every: 1             # Evaluate every N epochs
+
+data:
+  games: ['Pong-v5', 'Breakout-v5', 'MsPacman-v5']
+  replay_dir: 'data'
+  frames_per_game: 100000   # data/{game}/frames.npy — (100000, 4, 84, 84) uint8
+
+logging:
+  save_dir: 'checkpoints/spatial_encoder'
+  wandb_project: 'hi-dreamer-spatial-encoder'
+  log_every: 100            # Steps between log entries
+  save_every: 10            # Save checkpoint every N epochs
