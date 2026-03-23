@@ -1,0 +1,48 @@
+# SPATIAL WORLD MODEL CONFIG
+# Trains SpatialHierarchicalWorldModel (world_model_spatial.py)
+# on spatial token sequences produced by SpatialHRVQTokenizer.
+#
+# Token layout per timestep: [L0×4, L1×16, L2×16, Action] = 37 tokens
+# Context = 16 timesteps × 37 = 592 positions
+#
+# Memory budget (T4 16GB):
+#   Attention matrix: 592×592 × 6 heads × fp16 ≈ 4.2MB per batch element
+#   At batch_size=32: ~134MB attention + ~1.2GB activations → fits comfortably
+
+model:
+  d_model: 384              # Embedding dimension (matches SpatialAtariEncoder output)
+  n_layers: 6               # Transformer depth
+  n_heads: 6                # Attention heads (d_model / n_heads = 64, standard)
+  d_ff: 1536                # FFN width (4 × d_model)
+  dropout: 0.1
+  max_seq_len: 592          # 16 context timesteps × 37 tokens/timestep
+  num_codes: 256            # Codebook size (must match SpatialHRVQTokenizer)
+  num_actions: 9            # Max actions across Pong/Breakout/MsPacman
+
+  # Hierarchical prediction loss weights
+  l0_weight: 1.0            # Coarse patches — highest priority
+  l1_weight: 0.5            # Mid patches
+  l2_weight: 0.1            # Fine patches — hardest to predict, lowest weight
+
+training:
+  seed: 42
+  batch_size: 32            # Sequences per batch (T4 VRAM limited)
+  seq_len: 16               # Timesteps per sequence (→ 592 positions, fits max_seq_len)
+  learning_rate: 3.0e-4
+  weight_decay: 0.1
+  grad_clip: 1.0
+  num_epochs: 50
+  warmup_steps: 1000
+  betas: [0.9, 0.95]        # AdamW momentum (GPT/STORM)
+  mixed_precision: true
+  accumulation_steps: 2     # Effective batch = 32×2 = 64
+
+data:
+  games: ['Pong-v5', 'Breakout-v5', 'MsPacman-v5']
+  tokens_dir: 'checkpoints/spatial_tokens'   # Output of extract_spatial_tokens.py
+  val_split: 0.05
+
+logging:
+  save_dir: 'checkpoints/world_model_spatial'
+  wandb_project: 'hi-dreamer-spatial-wm'
+  save_every: 10

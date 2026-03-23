@@ -1,0 +1,48 @@
+# SPATIAL ENCODER TRAINING CONFIG
+# Trains SpatialAtariEncoder (encoder_v2.py) + SpatialHRVQTokenizer (vq_spatial.py)
+# jointly via reconstruction loss: encode → quantize → decode → MSE on patch embeddings.
+#
+# Key difference from encoder_v1 training:
+#   - Loss is computed per-patch (not global embedding MSE)
+#   - Three reconstruction terms (l0, l1, l2) weighted by spatial scale
+
+model:
+  d_model: 384              # Patch embedding dimension (must match HRVQ codebook dim)
+  input_channels: 4         # Stacked grayscale frames
+
+tokenizer:
+  num_codes: 256            # Codebook size per level
+  commitment_costs: [0.05, 0.25, 0.60]   # Per-level commitment costs [l0, l1, l2]
+  decay: 0.99               # EMA decay for codebook update
+  epsilon: 1.0e-5
+
+# Reconstruction loss weights per spatial level
+loss:
+  l0_weight: 1.0            # Coarse patches (2×2) — most important (global structure)
+  l1_weight: 0.7            # Mid patches (4×4)
+  l2_weight: 0.5            # Fine patches (4×4)
+
+training:
+  seed: 42
+  batch_size: 64            # Frames per batch (not sequences)
+  num_epochs: 30
+  learning_rate: 3.0e-4
+  weight_decay: 0.01
+  grad_clip: 1.0
+  warmup_steps: 500
+  betas: [0.9, 0.999]
+  mixed_precision: true     # float16 AMP on T4
+
+  # Validation
+  val_split: 0.05
+  eval_every: 1             # Evaluate every N epochs
+
+data:
+  games: ['Pong-v5', 'Breakout-v5', 'MsPacman-v5']
+  replay_dir: 'data'
+  frames_per_game: 100000   # Total frames available per game
+
+logging:
+  save_dir: 'checkpoints/spatial_encoder'
+  wandb_project: 'hi-dreamer-spatial-encoder'
+  log_every: 100            # Steps between log entries
