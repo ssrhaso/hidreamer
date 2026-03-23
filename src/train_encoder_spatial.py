@@ -274,7 +274,8 @@ def token_entropy_loss_fn(
                            ('l2', tokenizer.vq_l2)]:
         feats = encoder_feats[key]   # (B, N, D)
         B, N, D = feats.shape
-        flat = feats.detach().reshape(B * N, D)   # detach: entropy as info signal
+        flat = feats.reshape(B * N, D)
+        
 
         # Squared distances: (B*N, num_codes)
         dists = (
