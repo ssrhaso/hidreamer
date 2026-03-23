@@ -184,6 +184,95 @@ class HiddenStateFeatureExtractor(nn.Module):
         return feat
             
 
+class CPCHead(nn.Module):
+    """Actor-Critic Contrastive Predictive Coding (AC-CPC) head.
+
+    Trains the feature extractor to produce representations that are predictive
+    of future states, using an InfoNCE (contrastive) loss.  This is the core of
+    TWISTER's representation improvement (Burchi & Timofte, ICLR 2025, §2.3).
+
+    WHY THIS IS NEEDED
+    
+    The WM hidden states are trained to predict discrete codebook entries (256-way
+    classification). They don't need to encode fine-grained position — just coarse
+    cluster membership.  The linear probe showed max per-feature correlation with
+    paddle y-position ≈ 0.27, and the feature_extractor projection was never being
+    updated (optimizer bug).  Together these explain why learned policies fail to
+    distinguish game states that matter for control.
+
+    HOW IT WORKS
+    Given a trajectory of features f_0, f_1, ..., f_{H-1}:
+        - predictor(f_t) should match projector(f_{t+k}) for the SAME trajectory
+        - but NOT match projector(f_{t+k}) from OTHER trajectories in the batch
+    The InfoNCE loss (cross-entropy over the similarity matrix) forces f_t to
+    encode information that determines f_{t+k}, i.e., the temporal dynamics —
+    ball/paddle position and velocity.
+
+    GRADIENT FLOW
+    cpc_loss → CPCHead params (via cpc_optimizer)
+               feature_extractor params (via actor_optimizer, since
+               trajectory.feats = feature_extractor(WM_hidden_states) is in graph)
+    """
+
+    def __init__(
+        self,
+        feat_dim    : int,
+        proj_dim    : int   = 256,   # projection dim (< feat_dim = info bottleneck)
+        k_steps     : int   = 3,     # how many steps ahead to predict
+        temperature : float = 0.1,   # InfoNCE temperature (0.07 SimCLR, 0.1 TWISTER)
+    ):
+        super().__init__()
+        self.k_steps     = k_steps
+        self.temperature = temperature
+
+        # Predictor: f_t → predicted future representation
+        self.predictor = nn.Sequential(
+            nn.Linear(feat_dim, feat_dim),
+            nn.SiLU(),
+            nn.Linear(feat_dim, proj_dim),
+        )
+        # Projector: f_{t+k} → target representation (stops gradient from future)
+        self.projector = nn.Linear(feat_dim, proj_dim)
+
+    def forward(
+        self,
+        feats : torch.Tensor,   # (B, H, feat_dim) — trajectory features
+    ) -> torch.Tensor:
+        """Compute InfoNCE loss: predictor(f_t) should identify projector(f_{t+k}).
+
+        Returns scalar contrastive loss.
+        """
+        B, H, D = feats.shape
+        k = self.k_steps
+
+        if H <= k:
+            return feats.new_zeros(()).requires_grad_(True)
+
+        anchors = feats[:, :H-k, :]   # (B, H-k, D) — current features
+        targets = feats[:, k:,   :]   # (B, H-k, D) — future features k steps ahead
+
+        preds = self.predictor(anchors)                    # (B, H-k, proj_dim)
+        tgts  = self.projector(targets.detach())           # (B, H-k, proj_dim)
+        # detach targets: we only want to pull anchors toward targets,
+        # not push targets toward anchors (asymmetric, like BYOL/SimSiam)
+
+        # L2-normalise → cosine similarity space
+        preds = F.normalize(preds, dim=-1)
+        tgts  = F.normalize(tgts,  dim=-1)
+
+        # Flatten batch × time dimension: (T, proj_dim)
+        T          = B * (H - k)
+        preds_flat = preds.reshape(T, -1)
+        tgts_flat  = tgts.reshape(T, -1)
+
+        # InfoNCE: logit[i,j] = similarity(pred_i, target_j)
+        # Positive pairs lie on the diagonal (i == j)
+        logits = torch.matmul(preds_flat, tgts_flat.t()) / self.temperature  # (T, T)
+        labels = torch.arange(T, device=feats.device)
+
+        return F.cross_entropy(logits, labels)
+
+
 class ActorNetwork(nn.Module):
     """ The Actor. 
     

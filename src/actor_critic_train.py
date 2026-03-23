@@ -92,8 +92,11 @@ class ActorCriticTrainer:
         
         policy_config = config['policy']
         
+        # BUG FIX: feature_extractor was being gradient-clipped but NEVER stepped,
+        # because it wasn't in any optimizer.  Include it here so its projection
+        # layer actually trains via actor loss (and AC-CPC loss added below).
         self.actor_optimizer = Adam(
-            params = policy.parameters(),
+            params = list(policy.parameters()) + list(feature_extractor.parameters()),
             lr = policy_config['actor_lr'],
             eps = 1e-5,
         )
@@ -138,6 +141,29 @@ class ActorCriticTrainer:
             if 'model' not in config:
                 self.wm_layer_weights = self.world_model.config.layer_weights
 
+
+        # AC-CPC head (optional) — temporal contrastive loss that trains
+        # feature_extractor to produce position/velocity-aware representations.
+        # Without this, the WM features are never shaped to encode the continuous
+        # quantities (paddle pos, ball pos) that the policy needs for control.
+        from policy import CPCHead
+        if policy_config.get('use_cpc', False):
+            self.cpc_head = CPCHead(
+                feat_dim    = feature_extractor.feat_dim,
+                proj_dim    = policy_config.get('cpc_proj_dim', 256),
+                k_steps     = policy_config.get('cpc_k_steps', 3),
+                temperature = policy_config.get('cpc_temperature', 0.1),
+            ).to(self.device)
+            # CPC head is a tiny MLP; stepped together with actor since its loss
+            # backprops through feature_extractor (which is now in actor_optimizer).
+            self.cpc_optimizer = Adam(
+                params = self.cpc_head.parameters(),
+                lr = policy_config.get('cpc_lr', 1e-4),
+                eps = 1e-5,
+            )
+        else:
+            self.cpc_head = None
+            self.cpc_optimizer = None
 
         # Slow Target for Critic (EMA)
         self.slow_target = CriticMovingAverage(
@@ -390,25 +416,46 @@ class ActorCriticTrainer:
             
         # REINFORCE Loss
         actor_loss = -(trajectory.log_probs * advantages.detach()).mean()
-        
-        # ENTROPY REGULARIZATION 
+
+        # ENTROPY REGULARIZATION
         entropy_loss = -trajectory.entropies.mean()
-        
+
         total_actor_loss = actor_loss + entropy_scale * entropy_loss
-        
-        # BACKPROP AND OPTIMIZE
+
+        # AC-CPC AUXILIARY LOSS (if enabled)
+        # trajectory.feats: (B, H, feat_dim) — in computation graph because
+        # feature_extractor is trainable (now in actor_optimizer after bug fix).
+        # CPC loss trains feature_extractor to produce temporally predictive
+        # representations (encoding ball/paddle position and velocity).
+        cpc_loss_val = 0.0
+        if self.cpc_head is not None:
+            cpc_scale = self.config['policy'].get('cpc_scale', 0.5)
+            cpc_loss = self.cpc_head(trajectory.feats)
+            total_actor_loss = total_actor_loss + cpc_scale * cpc_loss
+            cpc_loss_val = cpc_loss.item()
+
+        # BACKPROP AND OPTIMIZE (actor + feature_extractor + cpc_head in one pass)
         self.actor_optimizer.zero_grad()
+        if self.cpc_optimizer is not None:
+            self.cpc_optimizer.zero_grad()
+
         total_actor_loss.backward()
+
         torch.nn.utils.clip_grad_norm_(
-            list(self.policy.parameters()) + list(self.feature_extractor.parameters()), 
+            list(self.policy.parameters()) + list(self.feature_extractor.parameters()),
             max_norm = self.config['policy']['actor_max_norm']
         )
         self.actor_optimizer.step()
+
+        if self.cpc_optimizer is not None:
+            torch.nn.utils.clip_grad_norm_(self.cpc_head.parameters(), max_norm=1.0)
+            self.cpc_optimizer.step()
         
         # RETURNS
         return {
             'actor/loss': actor_loss.item(),
             'actor/entropy': trajectory.entropies.mean().item(),
+            'actor/cpc_loss': cpc_loss_val,
             'critic/loss': critic_loss.item(),
             'critic/value_mean': values.mean().item(),
             'returns/mean': lambda_returns.mean().item(),
@@ -732,6 +779,8 @@ class ActorCriticTrainer:
                 steps_per_second = (step + 1) / max(elapsed, 1)
                 
                 # Build log string
+                cpc_str = (f" | cpc={actor_critic_metrics['actor/cpc_loss']:.3f}"
+                           if self.cpc_head is not None else "")
                 log_str = (
                     f"Step {step:>6d}/{total_steps} | "
                     f"H={current_horizon} | "
@@ -742,6 +791,7 @@ class ActorCriticTrainer:
                     f"rew_loss={aux_metrics['aux/reward_loss']:.4f} | "
                     f"rew_std={aux_metrics['aux/reward_pred_std']:.4f} | "
                     f"rew_nz={aux_metrics['aux/reward_pred_nonzero_frac']:.3f}"
+                    + cpc_str
                 )
                 
                 # Append WM metrics if joint training
@@ -810,7 +860,7 @@ class ActorCriticTrainer:
         checkpoint = {
             'step': step,
             'best_return': best_return,
-            'game': self.config['policy'].get('game', 'unknown'),  
+            'game': self.config['policy'].get('game', 'unknown'),
             'policy_state_dict': self.policy.state_dict(),
             'critic_state_dict': self.critic.state_dict(),
             'reward_net_state_dict': self.reward_network.state_dict(),
@@ -820,6 +870,10 @@ class ActorCriticTrainer:
             'critic_optim_state_dict': self.critic_optimizer.state_dict(),
             'aux_optim_state_dict': self.aux_optimizer.state_dict(),
         }
+
+        if self.cpc_head is not None:
+            checkpoint['cpc_head_state_dict']  = self.cpc_head.state_dict()
+            checkpoint['cpc_optim_state_dict'] = self.cpc_optimizer.state_dict()
 
         # Save WM state if joint training (critical for Colab resume)
         if self.joint_training_enabled:

@@ -42,6 +42,18 @@ policy:
   return_normalizer_decay: 0.99    # Decay for return normalizer(DreamerV3)
   unimix: 0.01                     # Policy uniform mixture (DreamerV3: 1%)
 
+  # AC-CPC: Temporal Contrastive Predictive Coding (TWISTER §2.3)
+  # Trains feature_extractor to produce temporally-predictive representations.
+  # The linear probe showed max per-feature correlation with paddle y = 0.27;
+  # the feature_extractor was also never updated (optimizer bug, now fixed).
+  # CPC forces features to encode what determines future states = position + velocity.
+  use_cpc: true               # Enable AC-CPC auxiliary loss
+  cpc_proj_dim: 256           # Projection dimension for InfoNCE (< feat_dim)
+  cpc_k_steps: 3              # Steps ahead to predict (k=3 balances signal/difficulty)
+  cpc_temperature: 0.1        # InfoNCE temperature (0.07 SimCLR, 0.1 TWISTER)
+  cpc_scale: 0.5              # Weight of CPC loss relative to actor loss
+  cpc_lr: 1.0e-4              # Learning rate for CPC head (higher than actor)
+
   # REWARD CLASS-IMBALANCE FIX
   # Pong: ~1% of steps have non-zero reward. Plain MSE collapses to predicting 0
   # everywhere (degenerate mode: reward_loss=0.0002, reward_pred_std~0).
