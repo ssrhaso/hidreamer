@@ -34,12 +34,8 @@ from dataclasses import dataclass, field
 from typing import Optional, Tuple, List, Dict
 import yaml
 
-from world_model import TransformerBlock  # Reuse existing block
 
-
-# ---------------------------------------------------------------------------
 # Constants
-# ---------------------------------------------------------------------------
 NUM_L0 = 4   # coarse 2×2 patches
 NUM_L1 = 16  # mid 4×4 patches
 NUM_L2 = 16  # fine 4×4 patches
@@ -52,9 +48,7 @@ L2_START, L2_END = NUM_L0+NUM_L1, NUM_L0+NUM_L1+NUM_L2  # [20, 36)
 ACTION_POS = TOKENS_PER_TIMESTEP - 1       # = 36
 
 
-# ---------------------------------------------------------------------------
 # Config
-# ---------------------------------------------------------------------------
 @dataclass
 class SpatialWorldModelConfig:
     """Config for the Spatial World Model. Load via from_yaml()."""
@@ -116,9 +110,7 @@ class SpatialWorldModelConfig:
         )
 
 
-# ---------------------------------------------------------------------------
 # Token Embedding
-# ---------------------------------------------------------------------------
 class SpatialTokenEmbedding(nn.Module):
     """
     Embeds spatial tokens + actions into a flat (B, T*37, d_model) sequence.
@@ -135,20 +127,13 @@ class SpatialTokenEmbedding(nn.Module):
         self.config = config
         D = config.d_model
 
-        # Token lookup tables — each level has its own, sized to its codebook
+        # Separate embedding tables per level (independent codebooks)
         self.l0_embed  = nn.Embedding(config.num_codes_l0, D)
         self.l1_embed  = nn.Embedding(config.num_codes_l1, D)
         self.l2_embed  = nn.Embedding(config.num_codes_l2, D)
         self.act_embed = nn.Embedding(config.num_actions, D)
-
-        # Level-type embedding (4 types: L0, L1, L2, action)
-        self.level_embed = nn.Embedding(4, D)
-
-        # Spatial patch-index embedding within each level
-        # L0: 4 positions, L1: 16, L2: 16 — all fit in one table of size 16
-        self.patch_embed = nn.Embedding(NUM_L1, D)   # max(4,16,16) = 16
-
-        # Absolute position embedding across the full sequence
+        self.level_embed = nn.Embedding(4, D)  # 4 types: L0, L1, L2, action
+        self.patch_embed = nn.Embedding(NUM_L1, D)  # shared patch-index table, size 16 covers all levels
         self.pos_embed = nn.Embedding(config.max_seq_len, D)
 
     def forward(
@@ -164,34 +149,25 @@ class SpatialTokenEmbedding(nn.Module):
         level_ids = torch.arange(4, device=device)
         lvl = self.level_embed(level_ids)  # (4, D)
 
-        # --- Embed each component ---
         e_l0  = self.l0_embed(tokens_l0)    # (B, T, 4,  D)
         e_l1  = self.l1_embed(tokens_l1)    # (B, T, 16, D)
         e_l2  = self.l2_embed(tokens_l2)    # (B, T, 16, D)
         e_act = self.act_embed(actions)      # (B, T,     D)
 
-        # Add level-type embedding
-        e_l0  = e_l0  + lvl[0]   # broadcast over (B,T,4)
+        e_l0  = e_l0  + lvl[0]
         e_l1  = e_l1  + lvl[1]
         e_l2  = e_l2  + lvl[2]
         e_act = e_act + lvl[3]
 
-        # Add spatial patch-index embedding within each level
-        l0_patch_ids = torch.arange(NUM_L0, device=device)
-        l1_patch_ids = torch.arange(NUM_L1, device=device)
-        l2_patch_ids = torch.arange(NUM_L2, device=device)
+        e_l0  = e_l0  + self.patch_embed(torch.arange(NUM_L0, device=device))
+        e_l1  = e_l1  + self.patch_embed(torch.arange(NUM_L1, device=device))
+        e_l2  = e_l2  + self.patch_embed(torch.arange(NUM_L2, device=device))
 
-        e_l0  = e_l0  + self.patch_embed(l0_patch_ids)   # (B,T,4,D)
-        e_l1  = e_l1  + self.patch_embed(l1_patch_ids)   # (B,T,16,D)
-        e_l2  = e_l2  + self.patch_embed(l2_patch_ids)   # (B,T,16,D)
-
-        # --- Interleave into flat sequence (B, T*37, D) ---
-        # For each timestep: [L0_0..L0_3, L1_0..L1_15, L2_0..L2_15, A]
+        # Interleave into flat sequence (B, T*37, D) — per timestep: [L0_0..L0_3, L1_0..L1_15, L2_0..L2_15, A]
         e_act_exp = e_act.unsqueeze(2)  # (B, T, 1, D)
         timestep = torch.cat([e_l0, e_l1, e_l2, e_act_exp], dim=2)  # (B, T, 37, D)
         seq = timestep.reshape(B, T * TOKENS_PER_TIMESTEP, self.config.d_model)
 
-        # --- Absolute positional embedding ---
         positions = torch.arange(T * TOKENS_PER_TIMESTEP, device=device)
         seq = seq + self.pos_embed(positions)
 
@@ -235,9 +211,7 @@ class SpatialTokenEmbedding(nn.Module):
         return seq  # (B, 37, D)
 
 
-# ---------------------------------------------------------------------------
 # Hierarchical Causal Mask for 37-token sequences
-# ---------------------------------------------------------------------------
 def spatial_hierarchical_causal_mask(
     seq_len: int,
     device: torch.device,
@@ -261,65 +235,52 @@ def spatial_hierarchical_causal_mask(
     P = TOKENS_PER_TIMESTEP
     num_t = seq_len // P
 
-    # Start with full upper-triangular causal block (all future positions blocked)
     mask = torch.triu(torch.ones(seq_len, seq_len, device=device), diagonal=1).bool()
 
-    # ---- Within-timestep refinement ----------------------------------------
     for t in range(num_t):
         base = t * P
 
-        # L0 patches: standard causal within L0 (already handled by triu)
-        # → L0_i can see L0_0..L0_{i-1} and itself ✓ (triu gives correct within-level)
-
-        # L1 patches: each sees ALL L0 of same timestep (triu blocks same-timestep L0)
+        # L1: each patch sees all L0 of same timestep (triu incorrectly blocks them)
         for j in range(NUM_L1):
             l1_pos = base + L1_START + j
             for i in range(NUM_L0):
-                mask[l1_pos, base + L0_START + i] = False  # allow L1_j → L0_i
+                mask[l1_pos, base + L0_START + i] = False
 
-        # L2 patches: each sees ALL L0 + ALL L1 of same timestep
+        # L2: each patch sees all L0 + all L1 of same timestep
         for k in range(NUM_L2):
             l2_pos = base + L2_START + k
             for i in range(NUM_L0):
-                mask[l2_pos, base + L0_START + i] = False  # allow L2_k → L0_i
+                mask[l2_pos, base + L0_START + i] = False
             for j in range(NUM_L1):
-                mask[l2_pos, base + L1_START + j] = False  # allow L2_k → L1_j
+                mask[l2_pos, base + L1_START + j] = False
 
-        # Action token: sees ALL 36 preceding tokens in same timestep
+        # Action: sees all 36 preceding tokens in same timestep
         act_pos = base + ACTION_POS
         for i in range(ACTION_POS):
-            mask[act_pos, base + i] = False  # allow A → all tokens at t
+            mask[act_pos, base + i] = False
 
-    # ---- Cross-timestep restriction ----------------------------------------
-    # L1, L2, Action at timestep t_q CANNOT see past L1 or L2 at t_k < t_q.
-    # They CAN see past L0 (pos base_k + 0..3) and past Action (pos base_k + 36).
+    # L1, L2, Action cannot attend to past L1/L2 (only past L0 and past Action)
     for t_q in range(1, num_t):
         base_q = t_q * P
         for t_k in range(t_q):
             base_k = t_k * P
-            # Rows that are L1, L2, or Action at t_q
             restricted_rows = (
                 list(range(base_q + L1_START, base_q + L1_END)) +
                 list(range(base_q + L2_START, base_q + L2_END)) +
                 [base_q + ACTION_POS]
             )
-            # Columns that are past L1 or L2 at t_k
             blocked_cols = (
                 list(range(base_k + L1_START, base_k + L1_END)) +
                 list(range(base_k + L2_START, base_k + L2_END))
             )
             for row in restricted_rows:
                 for col in blocked_cols:
-                    mask[row, col] = True  # block
+                    mask[row, col] = True
 
-    # Convert bool → float additive mask
-    float_mask = mask.float().masked_fill(mask, float('-inf'))
-    return float_mask
+    return mask.float().masked_fill(mask, float('-inf'))
 
 
-# ---------------------------------------------------------------------------
 # Spatial World Model
-# ---------------------------------------------------------------------------
 class SpatialHierarchicalWorldModel(nn.Module):
     """
     Hierarchical World Model with 37-token spatial layout.
@@ -332,23 +293,14 @@ class SpatialHierarchicalWorldModel(nn.Module):
         super().__init__()
         self.config = config
 
-        # Embedding layer
         self.embedding = SpatialTokenEmbedding(config)
-
-        # Transformer blocks (reuse existing TransformerBlock with WorldModelConfig-like API)
-        # We need a minimal adapter since TransformerBlock takes WorldModelConfig
         self.blocks = nn.ModuleList([
             _SpatialTransformerBlock(config) for _ in range(config.n_layers)
         ])
-
         self.ln_final = nn.LayerNorm(config.d_model)
-
-        # Output heads — one per spatial level, sized to its codebook
         self.head_l0 = nn.Linear(config.d_model, config.num_codes_l0)
         self.head_l1 = nn.Linear(config.d_model, config.num_codes_l1)
         self.head_l2 = nn.Linear(config.d_model, config.num_codes_l2)
-
-        # Mask cache
         self._cached_mask = None
         self._cached_mask_len = 0
 
@@ -367,87 +319,41 @@ class SpatialHierarchicalWorldModel(nn.Module):
         tokens_l2: torch.Tensor,   # (B, T, 16)
         actions:   torch.Tensor,   # (B, T)
     ) -> Dict[str, torch.Tensor]:
-        """
-        Teacher-forced forward pass.
-
-        Returns
-        -------
-        dict:
-            'hidden':    (B, T*37, d_model) — all hidden states
-            'logits_l0': (B, T, 4,  num_codes) — logits for L0 patches
-            'logits_l1': (B, T, 16, num_codes) — logits for L1 patches
-            'logits_l2': (B, T, 16, num_codes) — logits for L2 patches
-
-        NOTE: logits_lN[t][i] is predicted from the token PRECEDING lN_i at timestep t.
-        For training, compute cross-entropy with ground-truth tokens shifted by 1.
-        """
+        """Teacher-forced next-token prediction. Returns hidden, logits_l0/l1/l2."""
         B, T, _ = tokens_l0.shape
         P = TOKENS_PER_TIMESTEP
         seq_len = T * P
 
-        # Embed
-        x = self.embedding(tokens_l0, tokens_l1, tokens_l2, actions)  # (B, T*37, D)
-
-        # Mask
+        x = self.embedding(tokens_l0, tokens_l1, tokens_l2, actions)
         mask = self._get_mask(seq_len, x.device)
-
-        # Transformer blocks
         for block in self.blocks:
             x = block(x, mask)
 
-        x = self.ln_final(x)  # (B, T*37, D)
-
-        # --- Extract hidden states for next-token prediction ---
-        # In the flat sequence, position i predicts position i+1.
-        # We extract hidden states at the position BEFORE each token group.
-        #
-        # For L0 of timestep t (positions base + 0..3):
-        #   L0_0: predicted by h[base - 1] = action of t-1  (skip t=0, no prev action)
-        #   L0_j (j>0): predicted by h[base + j - 1]
-        # For L1 of timestep t (positions base + 4..19):
-        #   L1_j: predicted by h[base + L1_START + j - 1]
-        # For L2 of timestep t (positions base + 20..35):
-        #   L2_j: predicted by h[base + L2_START + j - 1]
-        #
-        # Simpler: reshape x to (B, T, 37, D) and use shifted indexing within each timestep.
+        x = self.ln_final(x)
         x_ts = x.reshape(B, T, P, self.config.d_model)  # (B, T, 37, D)
 
-        # L0 logits: predicted from the action token of the PREVIOUS timestep (for t>0)
-        # and the preceding L0 patches within timestep (for j>0).
-        # We collect them as a block per timestep using the positions just before each L0 patch.
-        #   For j=0: use x_ts[t-1, ACTION_POS] (prev action hidden) → predict L0_0 at t
-        #   For j>0: use x_ts[t, j-1]          (prev L0 patch)     → predict L0_j at t
-
-        # Build source hidden states for each L0 token:
-        # shape (B, T, 4, D) — source_l0[b, t, j, :] predicts tokens_l0[b, t, j]
-        # t=0: we don't have a previous action; skip t=0 in loss (or use zeros)
+        # Each patch is predicted by the hidden state of the token immediately before it.
+        # L0_0 at t>0 uses the action hidden from t-1; t=0 rows stay zero (skipped in loss).
         l0_src = torch.zeros(B, T, NUM_L0, self.config.d_model, device=x.device)
         if T > 1:
-            # L0_0 of timestep t (t≥1): from action at t-1
             l0_src[:, 1:, 0, :] = x_ts[:, :-1, ACTION_POS, :]
-        # L0_j (j>0): from L0_{j-1} within same timestep
         for j in range(1, NUM_L0):
             l0_src[:, :, j, :] = x_ts[:, :, L0_START + j - 1, :]
+        logits_l0 = self.head_l0(l0_src)
 
-        logits_l0 = self.head_l0(l0_src)  # (B, T, 4, num_codes)
-
-        # L1 logits: from the token just before L1_j within same timestep
-        #   L1_0: from L0_3 (last L0 patch)
-        #   L1_j (j>0): from L1_{j-1}
+        # L1_0 conditioned on L0_3; L1_j on L1_{j-1}.
         l1_src = torch.zeros(B, T, NUM_L1, self.config.d_model, device=x.device)
-        l1_src[:, :, 0, :] = x_ts[:, :, L0_END - 1, :]  # L0_3
+        l1_src[:, :, 0, :] = x_ts[:, :, L0_END - 1, :]
         for j in range(1, NUM_L1):
             l1_src[:, :, j, :] = x_ts[:, :, L1_START + j - 1, :]
-        logits_l1 = self.head_l1(l1_src)  # (B, T, 16, num_codes)
+        logits_l1 = self.head_l1(l1_src)
 
-        # L2 logits: from token just before L2_j within same timestep
-        #   L2_0: from L1_15 (last L1 patch)
-        #   L2_j (j>0): from L2_{j-1}
+        # L2_0 conditioned on L1_15; L2_j on L2_{j-1}.
         l2_src = torch.zeros(B, T, NUM_L2, self.config.d_model, device=x.device)
-        l2_src[:, :, 0, :] = x_ts[:, :, L1_END - 1, :]  # L1_15
+        l2_src[:, :, 0, :] = x_ts[:, :, L1_END - 1, :]
         for j in range(1, NUM_L2):
             l2_src[:, :, j, :] = x_ts[:, :, L2_START + j - 1, :]
-        logits_l2 = self.head_l2(l2_src)  # (B, T, 16, num_codes)
+        logits_l2 = self.head_l2(l2_src)
 
         return {
             'hidden':    x,
@@ -458,25 +364,20 @@ class SpatialHierarchicalWorldModel(nn.Module):
 
     def compute_loss(
         self,
-        logits_l0: torch.Tensor,   # (B, T, 4,  num_codes)
-        logits_l1: torch.Tensor,   # (B, T, 16, num_codes)
-        logits_l2: torch.Tensor,   # (B, T, 16, num_codes)
-        tokens_l0: torch.Tensor,   # (B, T, 4)  ground-truth
-        tokens_l1: torch.Tensor,   # (B, T, 16)
-        tokens_l2: torch.Tensor,   # (B, T, 16)
+        logits_l0: torch.Tensor,
+        logits_l1: torch.Tensor,
+        logits_l2: torch.Tensor,
+        tokens_l0: torch.Tensor,
+        tokens_l1: torch.Tensor,
+        tokens_l2: torch.Tensor,
     ) -> Tuple[torch.Tensor, Dict[str, float]]:
-        """
-        Cross-entropy losses for next-token prediction.
-
-        t=0 L0 predictions are skipped (no previous action to condition on).
-        """
+        """Weighted cross-entropy losses. t=0 L0 predictions skipped (no prior action)."""
         B, T, _ = tokens_l0.shape
 
         def ce(logits, targets, skip_t0=False):
-            # logits: (B, T, N, C), targets: (B, T, N)
             if skip_t0:
-                logits  = logits[:, 1:]   # (B, T-1, N, C)
-                targets = targets[:, 1:]  # (B, T-1, N)
+                logits  = logits[:, 1:]
+                targets = targets[:, 1:]
             C = logits.size(-1)
             return F.cross_entropy(logits.reshape(-1, C), targets.reshape(-1).long())
 
@@ -505,14 +406,7 @@ class SpatialHierarchicalWorldModel(nn.Module):
         tokens_l2: torch.Tensor,   # (B, T, 16)
         actions:   torch.Tensor,   # (B, T)
     ) -> Tuple[torch.Tensor, List]:
-        """
-        Forward a context window and return (hidden_states, kv_cache).
-
-        Returns
-        -------
-        hidden : (B, T*37, d_model) — all hidden states
-        kv_cache : list of (K, V) tuples per layer
-        """
+        """Forward a context window and return (hidden, kv_cache)."""
         B, T, _ = tokens_l0.shape
         seq_len = T * TOKENS_PER_TIMESTEP
         x = self.embedding(tokens_l0, tokens_l1, tokens_l2, actions)
@@ -534,85 +428,36 @@ class SpatialHierarchicalWorldModel(nn.Module):
         tokens_l2_seed: torch.Tensor,  # (B, 16)
         action: torch.Tensor,          # (B,)   — chosen action
         kv_cache: List,
-        context_len: int,
     ) -> Tuple[Dict[str, torch.Tensor], torch.Tensor, List]:
-        """
-        One-step imagination: predict tokens for the NEXT timestep.
-
-        Given the current KV-cache (context up to the last action) and a new action,
-        extend the cache by embedding the new timestep's tokens autoregressively at
-        the LEVEL level (all L0 patches in parallel, then all L1, then all L2).
-
-        NOTE: This is a LEVEL-PARALLEL imagination (3 forward passes per imagined step,
-        one per level), which is faster than full autoregressive (37 steps) while
-        still respecting the hierarchical structure: L0 conditioned on context only,
-        L1 on L0, L2 on L0+L1.
-
-        Returns
-        -------
-        pred_tokens : dict 'l0':(B,4), 'l1':(B,16), 'l2':(B,16)
-        hidden_action : (B, d_model) — hidden state at the new action position
-        updated_kv_cache : list of (K, V)
-        """
+        """Level-parallel one-step imagination: L0 from action hidden, L1 from L0, L2 from L0+L1."""
         B = hidden_last.size(0)
         device = hidden_last.device
-        P = TOKENS_PER_TIMESTEP
 
-        # Total sequence length after appending new timestep
-        new_context_len = context_len + P
+        # Predict L0 patches from the last action hidden state.
+        # All L0 patches share the same conditioning hidden (level-parallel approximation).
+        l0_logits = self.head_l0(hidden_last)                           # (B, num_codes_l0)
+        pred_l0_0 = l0_logits.argmax(dim=-1)                           # (B,)
+        pred_l0 = pred_l0_0.unsqueeze(1).expand(B, NUM_L0)             # (B, 4)
 
-        # --- Predict L0 tokens from action hidden state ---
-        # For simplicity (level-parallel), we use the action hidden state to predict
-        # L0_0, then each L0_{j} from the preceding L0_{j-1} via an incremental pass.
-        # Here we use the logit heads directly on the last action hidden state for L0_0,
-        # then feed predicted L0 tokens into the embedding for L1 prediction, etc.
-
-        # Predict all L0 patches in a single linear pass from the action hidden
-        # (this approximates the autoregressive within-level process)
-        l0_logits = self.head_l0(hidden_last)   # (B, num_codes) — predicts L0_0
-        pred_l0_0 = l0_logits.argmax(dim=-1)    # (B,)
-        # For simplicity, predict all L0 patches using the same hidden state
-        # (the within-level causal structure matters more for training than imagination)
-        pred_l0 = pred_l0_0.unsqueeze(1).expand(B, NUM_L0)  # (B, 4) — same token approx
-
-        # Better: embed first predicted L0 token, run one incremental step, etc.
-        # For the smoke test, the simple path above suffices. Full autoregressive
-        # imagination would require 36 incremental forward passes.
-
-        # Predict L1 from L0 embeddings
-        l0_embs = self.embedding.l0_embed(pred_l0)  # (B, 4, D)
-        # Use mean of L0 embeddings as context for L1 prediction
-        l0_ctx = l0_embs.mean(dim=1)  # (B, D)
-        l1_logits = self.head_l1(l0_ctx)   # (B, num_codes)
+        # Predict L1 patches conditioned on mean L0 embedding.
+        l0_ctx = self.embedding.l0_embed(pred_l0).mean(dim=1)          # (B, D)
+        l1_logits = self.head_l1(l0_ctx)                               # (B, num_codes_l1)
         pred_l1 = l1_logits.argmax(dim=-1).unsqueeze(1).expand(B, NUM_L1)  # (B, 16)
 
-        # Predict L2 from L0+L1 embeddings
-        l1_embs = self.embedding.l1_embed(pred_l1)  # (B, 16, D)
-        l1_ctx = l1_embs.mean(dim=1)   # (B, D)
-        l0l1_ctx = l0_ctx + l1_ctx     # (B, D)
-        l2_logits = self.head_l2(l0l1_ctx)  # (B, num_codes)
+        # Predict L2 patches conditioned on mean L0+L1 embedding.
+        l1_ctx = self.embedding.l1_embed(pred_l1).mean(dim=1)          # (B, D)
+        l2_logits = self.head_l2(l0_ctx + l1_ctx)                      # (B, num_codes_l2)
         pred_l2 = l2_logits.argmax(dim=-1).unsqueeze(1).expand(B, NUM_L2)  # (B, 16)
 
         pred_tokens = {'l0': pred_l0, 'l1': pred_l1, 'l2': pred_l2}
-
-        # Return the current hidden state as the "action hidden" for next step
-        # (simplified — in full implementation, do a proper incremental pass)
         return pred_tokens, hidden_last, kv_cache
 
     def count_parameters(self) -> int:
         return sum(p.numel() for p in self.parameters() if p.requires_grad)
 
 
-# ---------------------------------------------------------------------------
-# Minimal TransformerBlock wrapper for SpatialWorldModelConfig
-# ---------------------------------------------------------------------------
+# Transformer block for SpatialWorldModelConfig
 class _SpatialTransformerBlock(nn.Module):
-    """
-    Standard transformer block using SpatialWorldModelConfig.
-
-    Adapts the interface of world_model.TransformerBlock to work with
-    SpatialWorldModelConfig instead of WorldModelConfig.
-    """
 
     def __init__(self, config: SpatialWorldModelConfig):
         super().__init__()
@@ -648,14 +493,15 @@ class _SpatialTransformerBlock(nn.Module):
         x: torch.Tensor,
         mask: torch.Tensor,
     ) -> Tuple[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
-        """Forward pass extracting K, V for KV-cache."""
+        """Forward pass that also returns K, V tensors for the KV-cache.
+        Accesses nn.MultiheadAttention's in_proj_weight directly (packed Q,K,V projection)."""
         B, S, D = x.shape
         n_heads = self.n_heads
         d_head = self.d_head
         H = n_heads
 
         x_norm = self.ln1(x)
-        W = self.attn.in_proj_weight   # (3D, D)
+        W = self.attn.in_proj_weight   # (3D, D) — packed Q, K, V projections
         b = self.attn.in_proj_bias     # (3D,)
 
         Q = F.linear(x_norm, W[:D],    b[:D])
@@ -679,7 +525,6 @@ class _SpatialTransformerBlock(nn.Module):
         return x, (K, V)
 
 
-# ---------------------------------------------------------------------------
 if __name__ == "__main__":
     print("=" * 70)
     print("SMOKE TEST: SpatialHierarchicalWorldModel (world_model_spatial)")
