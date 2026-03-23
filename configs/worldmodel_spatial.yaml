@@ -10,10 +10,11 @@
 #   At batch_size=32: ~134MB attention + ~1.2GB activations → fits comfortably
 
 model:
-  d_model: 384              # Embedding dimension (matches SpatialAtariEncoder output)
+  d_model: 384              # Embedding dimension (must match SpatialAtariEncoder output)
   n_layers: 6               # Transformer depth
-  n_heads: 6                # Attention heads (d_model / n_heads = 64, standard)
-  d_ff: 1536                # FFN width (4 × d_model)
+  # d_model / n_heads = 64 per head — standard key/value dimension (Vaswani et al., NeurIPS 2017)
+  n_heads: 6
+  d_ff: 1536                # FFN width = 4 × d_model (Vaswani et al., NeurIPS 2017)
   dropout: 0.1
   max_seq_len: 592          # 16 context timesteps × 37 tokens/timestep
   # Per-level codebook sizes — must match SpatialHRVQTokenizer / encoder_spatial.yaml
@@ -23,22 +24,27 @@ model:
   num_actions: 9            # Max actions across Pong/Breakout/MsPacman
 
   # Hierarchical prediction loss weights
-  l0_weight: 1.0            # Coarse patches — highest priority
+  l0_weight: 1.0            # Coarse patches — highest priority for game state inference
   l1_weight: 0.5            # Mid patches
-  l2_weight: 0.1            # Fine patches — hardest to predict, lowest weight
+  l2_weight: 0.1            # Fine patches — hardest to predict, least important for control
 
 training:
   seed: 42
   batch_size: 32            # Sequences per batch (T4 VRAM limited)
-  seq_len: 16               # Timesteps per sequence (→ 592 positions, fits max_seq_len)
+  seq_len: 16               # Timesteps per sequence (→ 592 positions, fills max_seq_len)
   learning_rate: 3.0e-4
-  weight_decay: 0.1
+  # GPT-style WD=0.1 is stronger than encoder (0.01) — appropriate for larger seq model
+  weight_decay: 0.1         # Brown et al., GPT-3, NeurIPS 2020
   grad_clip: 1.0
   num_epochs: 50
+  # warmup_steps is in optimizer steps (not forward passes); with accumulation_steps=2
+  # each optimizer step = 2 forward passes, so 1000 warmup = 2000 forward passes.
   warmup_steps: 1000
-  betas: [0.9, 0.95]        # AdamW momentum (GPT/STORM)
-  mixed_precision: true
+  betas: [0.9, 0.95]        # Lower β2 than AdamW default — faster variance adaptation
+                             # for transformer training (Brown et al. 2020; Hu et al. STORM, ICLR 2024)
+  mixed_precision: true     # float16 AMP (Micikevicius et al., ICLR 2018)
   accumulation_steps: 2     # Effective batch = 32×2 = 64
+  eval_every: 1             # Evaluate every N epochs
 
 data:
   games: ['Pong-v5', 'Breakout-v5', 'MsPacman-v5']
@@ -48,4 +54,5 @@ data:
 logging:
   save_dir: 'checkpoints/world_model_spatial'
   wandb_project: 'hi-dreamer-spatial-wm'
-  save_every: 10
+  log_every: 100            # Steps between log entries
+  save_every: 10            # Save checkpoint every N epochs
