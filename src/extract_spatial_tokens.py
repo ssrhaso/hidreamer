@@ -49,10 +49,13 @@ def load_models(checkpoint_path: str, config: dict, device: torch.device):
 
     tokenizer = SpatialHRVQTokenizer(
         d_model=d_model,
-        num_codes=config['tokenizer']['num_codes'],
+        num_codes_l0=config["tokenizer"]["num_codes_l0"],
+        num_codes_l1=config["tokenizer"]["num_codes_l1"],
+        num_codes_l2=config["tokenizer"]["num_codes_l2"],
         commitment_costs=config['tokenizer']['commitment_costs'],
         decay=config['tokenizer']['decay'],
         epsilon=config['tokenizer']['epsilon'],
+        use_gradient_vq=True,
     ).to(device)
 
     ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
@@ -208,7 +211,9 @@ def main():
     encoder, tokenizer = load_models(args.checkpoint, config, device)
 
     output_dir = Path(args.output_dir)
-    num_codes = config['tokenizer']['num_codes']
+    num_codes_l0 = config["tokenizer"]["num_codes_l0"]
+    num_codes_l1 = config["tokenizer"]["num_codes_l1"]
+    num_codes_l2 = config["tokenizer"]["num_codes_l2"]
 
     for game in args.games:
         print(f"\n{'='*50}")
@@ -227,7 +232,7 @@ def main():
 
         # Stats
         print(f"\nCodebook utilisation:")
-        print_codebook_stats(tokens_l0, tokens_l1, tokens_l2, num_codes)
+        print_codebook_stats(tokens_l0, tokens_l1, tokens_l2, max(num_codes_l0, num_codes_l1, num_codes_l2))
 
         reward_counts = {
             'positive': (rewards > 0).sum(),

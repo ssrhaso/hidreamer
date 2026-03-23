@@ -43,7 +43,7 @@ loss:
   # Penalises low entropy of soft codebook assignments over each batch.
   # Drives the model to use more of the codebook.
   diversity_weight: 0.1     # Weight of (1 - normalised_entropy) penalty
-  diversity_temp: 0.5       # Softmax temperature for soft assignments (lower = harder)
+  diversity_temp: 0.05
 
 # --- K-means codebook initialisation ---
 # Before epoch 1, collect encoder outputs from init_batches random batches
@@ -54,7 +54,7 @@ kmeans_init:
   init_batches: 100         # Batches to collect embeddings from (×batch_size frames)
 
 training:
-  seed: 42
+  seed: 0
   batch_size: 32            # Frames per batch — reduced from 64 to avoid OOM at epoch 14
   num_epochs: 30
   learning_rate: 3.0e-4
@@ -64,8 +64,8 @@ training:
   betas: [0.9, 0.999]
   mixed_precision: true     # float16 AMP on T4
   use_gradient_vq: true     # GradientVQ: active codebook gradient updates (vs EMA)
-  patch_diversity_weight: 0.5   # Penalise high cosine sim between patches in same frame
-  entropy_weight: 0.1           # Penalise per-frame codebook entropy collapse
+  patch_diversity_weight: 0.1
+  entropy_weight: 1.0
 
   val_split: 0.05
   eval_every: 1             # Evaluate every N epochs
