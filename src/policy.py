@@ -180,9 +180,125 @@ class HiddenStateFeatureExtractor(nn.Module):
         
         if self.use_projection:
             feat = self.projection(feat) # PROJECTED FEATURES (B, 1152)
-        
+
         return feat
-            
+
+    # Dispatch flag used by ImagineRollout and _train_aux
+    is_visual_mode: bool = False
+
+
+# ---------------------------------------------------------------------------
+# Visual policy components (hierarchical pixel decoding — IRIS-style)
+# ---------------------------------------------------------------------------
+
+class VisualEncoder(nn.Module):
+    """CNN encoder for multi-scale decoded Atari frames.
+
+    Input:  (B, 3, 84, 84) — [coarse, mid, full] decoded frames stacked as 3 channels
+    Output: (B, feat_dim)
+
+    Architecture mirrors AtariCNNEncoder (encoder_v1.py) but:
+      • input_channels=3 (decoded multi-scale, not raw 4-frame stack)
+      • No L2 normalisation (we want a general-purpose policy feature, not a contrastive embedding)
+      • LayerNorm + SiLU after projection for stable training
+    """
+
+    def __init__(self, input_channels: int = 3, feat_dim: int = 512):
+        super().__init__()
+        self.feat_dim = feat_dim
+
+        self.cnn = nn.Sequential(
+            nn.Conv2d(input_channels, 32, kernel_size=8, stride=4, padding=0),  # 20×20
+            nn.ReLU(inplace=True),
+            nn.Conv2d(32, 64, kernel_size=4, stride=2, padding=0),              # 9×9
+            nn.ReLU(inplace=True),
+            nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=0),              # 7×7
+            nn.ReLU(inplace=True),
+            nn.Flatten(),                                                         # 3136
+        )
+
+        self.head = nn.Sequential(
+            nn.Linear(64 * 7 * 7, feat_dim),
+            nn.LayerNorm(feat_dim),
+            nn.SiLU(),
+        )
+
+        self._init_weights()
+
+    def _init_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
+            elif isinstance(m, nn.Linear):
+                nn.init.kaiming_normal_(m.weight, nonlinearity='relu')
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """x: (B, 3, 84, 84) → (B, feat_dim)"""
+        return self.head(self.cnn(x))
+
+
+class VisualFeatureExtractor(nn.Module):
+    """Policy feature extraction via hierarchical pixel decoding (IRIS-style).
+
+    Replaces HiddenStateFeatureExtractor when policy_mode='visual'.
+
+    tokens (B, 3) → codebook embeddings → decoded at 3 scales → CNN → (B, feat_dim)
+
+    CRITICAL PROPERTY — distribution alignment:
+        During IMAGINATION:  tokens = WM cascade predictions
+        During REAL PLAY:    tokens = CNN encoder → HRVQ from real observations
+        Both paths use the SAME codebook→decode→CNN chain.
+        There is NO train/eval distribution shift (this is why IRIS works).
+
+    FROZEN (pre-trained):     hrvq_tokenizer, decoder
+    TRAINABLE (policy phase): visual_encoder
+    """
+
+    is_visual_mode: bool = True   # dispatch flag for ImagineRollout + _train_aux
+
+    def __init__(self, hrvq_tokenizer, decoder, visual_encoder: VisualEncoder):
+        super().__init__()
+        # Register decoder as submodule so .to(device) moves it, but the
+        # caller is responsible for freezing it (requires_grad=False on its params).
+        self.decoder        = decoder
+        self.visual_encoder = visual_encoder
+        # Do NOT register HRVQ as a submodule — it is already a top-level module
+        # managed by policy_train.py.  Store as a plain attribute to avoid duplicate
+        # parameters appearing in optimizer param groups.
+        self._hrvq = hrvq_tokenizer
+        self.feat_dim = visual_encoder.feat_dim
+
+    def get_multi_scale_frames(self, tokens: torch.Tensor) -> torch.Tensor:
+        """tokens (B, 3) → (B, 3, 84, 84) multi-scale decoded frames.
+
+        Channels:
+            ch 0 = coarse (L0 only)
+            ch 1 = mid    (L0 + L1)
+            ch 2 = full   (L0 + L1 + L2)
+        """
+        # Codebook lookup — always no-grad (codebook is frozen)
+        with torch.no_grad():
+            emb_l0 = self._hrvq.vq_layers[0].codebook(tokens[:, 0])  # (B, 384)
+            emb_l1 = self._hrvq.vq_layers[1].codebook(tokens[:, 1])  # (B, 384)
+            emb_l2 = self._hrvq.vq_layers[2].codebook(tokens[:, 2])  # (B, 384)
+
+        # Decoder may or may not have grad depending on freeze state.
+        # During policy training it is frozen, so these calls produce no grads.
+        coarse = self.decoder(emb_l0)                       # (B, 1, 84, 84)
+        mid    = self.decoder(emb_l0 + emb_l1)              # (B, 1, 84, 84)
+        full   = self.decoder(emb_l0 + emb_l1 + emb_l2)    # (B, 1, 84, 84)
+
+        return torch.cat([coarse, mid, full], dim=1)        # (B, 3, 84, 84)
+
+    def forward(self, tokens: torch.Tensor) -> torch.Tensor:
+        """tokens (B, 3) → policy features (B, feat_dim)."""
+        frames = self.get_multi_scale_frames(tokens)        # (B, 3, 84, 84)
+        return self.visual_encoder(frames)                  # (B, feat_dim)
+
 
 class CPCHead(nn.Module):
     """Actor-Critic Contrastive Predictive Coding (AC-CPC) head.
