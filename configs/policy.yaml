@@ -5,7 +5,18 @@
 
 policy:
   # ARCHITECTURE
-  feature_mode: "hidden_state" # "hidden_state" vs "concat"
+  # feature_mode options:
+  #   "hidden_state" — WM transformer hidden states + trainable projection (Run 9 default)
+  #   "visual"       — hierarchical pixel decoding: tokens→decoder→CNN (IRIS-style)
+  #   "concat"       — legacy: frozen codebook embedding concatenation
+  feature_mode: "hidden_state"
+
+  # VISUAL MODE CONFIG (only used when feature_mode: "visual")
+  # Step 1: train decoder first:  python src/train_decoder.py
+  # Step 2: switch feature_mode to "visual" and run policy training
+  decoder_checkpoint: "checkpoints/decoder_best.pt"
+  visual_feature_dim: 512   # VisualEncoder output dim (feat_dim for actor/critic)
+
   hidden_dim: 512            # MLP width for actor/critic (DreamerV3: 512)
   
   # ENV
@@ -47,7 +58,9 @@ policy:
   # The linear probe showed max per-feature correlation with paddle y = 0.27;
   # the feature_extractor was also never updated (optimizer bug, now fixed).
   # CPC forces features to encode what determines future states = position + velocity.
-  use_cpc: true               # Enable AC-CPC auxiliary loss
+  # NOTE: Set use_cpc: false when feature_mode: "visual" — CPC was designed for
+  # hidden-state features.  The VisualEncoder is regularised by the actor loss directly.
+  use_cpc: true               # Enable AC-CPC auxiliary loss (hidden_state mode only)
   cpc_proj_dim: 256           # Projection dimension for InfoNCE (< feat_dim)
   cpc_k_steps: 3              # Steps ahead to predict (k=3 balances signal/difficulty)
   cpc_temperature: 0.1        # InfoNCE temperature (0.07 SimCLR, 0.1 TWISTER)

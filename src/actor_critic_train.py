@@ -94,10 +94,14 @@ class ActorCriticTrainer:
         
         # BUG FIX: feature_extractor was being gradient-clipped but NEVER stepped,
         # because it wasn't in any optimizer.  Include it here so its projection
-        # layer actually trains via actor loss (and AC-CPC loss added below).
+        # layer (hidden-state mode) or visual_encoder (visual mode) actually trains.
+        # Filter by requires_grad so frozen decoder params (visual mode) are excluded.
         self.actor_optimizer = Adam(
-            params = list(policy.parameters()) + list(feature_extractor.parameters()),
-            lr = policy_config['actor_lr'],
+            params = (
+                [p for p in policy.parameters()            if p.requires_grad]
+                + [p for p in feature_extractor.parameters() if p.requires_grad]
+            ),
+            lr  = policy_config['actor_lr'],
             eps = 1e-5,
         )
         
@@ -279,28 +283,30 @@ class ActorCriticTrainer:
             
             # FEATURE EXTRACTION (for each timestep)
             B, L, _ = tokens.shape
-            
-            actions = batch['actions']         # (B, L)    (32, 64)
-            
-            with torch.no_grad():
-                # RUN FROZEN WM FOR HIDDEN STATES
-                
-                x = self.world_model.embedding(tokens, actions)  # (B, L*4, d_model)
-                mask = self.world_model._get_mask(x.size(1), x.device)
-                
-                for block in self.world_model.blocks:
-                    x = block(x, mask = mask)
-                
-                x = self.world_model.ln_final(x)  # (B, L*4, d_model)
-            
-            # EXTRACT L0, L1, L2 position hidden states per timestep:
-            h_l0 = x[:, 0::4, :]   # (B, L, d_model) - Every 4th token, starting at 0
-            h_l1 = x[:, 1::4, :]   # (B, L, d_model) - Every 4th token, starting at 1
-            h_l2 = x[:, 2::4, :]   # (B, L, d_model) - Every 4th token, starting at 2
-            
-            # CONCAT to match feature format (imagination)
-            hidden_states = torch.cat([h_l0, h_l1, h_l2], dim = -1)  # (B, L, d_model*3)
-            features = self.feature_extractor(hidden_states.reshape(B * L, -1))  # (B, L, feature_dim)
+
+            actions = batch['actions']         # (B, L)
+
+            is_visual = getattr(self.feature_extractor, 'is_visual_mode', False)
+
+            if is_visual:
+                # VISUAL MODE: decode directly from replay tokens — NO WM forward needed.
+                # Reward/continue networks use the same visual features as the actor.
+                tokens_flat = tokens.reshape(B * L, 3)                       # (B*L, 3)
+                features    = self.feature_extractor(tokens_flat)             # (B*L, feat_dim)
+            else:
+                # HIDDEN STATE MODE: run frozen WM to get hidden states.
+                with torch.no_grad():
+                    x = self.world_model.embedding(tokens, actions)
+                    mask = self.world_model._get_mask(x.size(1), x.device)
+                    for block in self.world_model.blocks:
+                        x = block(x, mask=mask)
+                    x = self.world_model.ln_final(x)                         # (B, L*4, d_model)
+
+                h_l0 = x[:, 0::4, :]   # (B, L, d_model)
+                h_l1 = x[:, 1::4, :]
+                h_l2 = x[:, 2::4, :]
+                hidden_states = torch.cat([h_l0, h_l1, h_l2], dim=-1)       # (B, L, d_model*3)
+                features = self.feature_extractor(hidden_states.reshape(B * L, -1))
             
             # CONTINUE NETWORK LOSS (Bernoulli) - Binary Classification 
             continue_logits = self.continue_network(features).squeeze(-1)       # (B*L) , raw logits
@@ -897,36 +903,43 @@ class ActorCriticTrainer:
         print(f"    Saved Checkpoint: {path}")
     
     def _get_online_features(self, tokens, action_history, token_history):
-        """Get hidden-state features for online mode by running WM on recent context."""
-        # Append current tokens to history
+        """Get features for online action selection.
+
+        Visual mode:       O(1) — decode current tokens via frozen decoder + CNN.
+                           No WM forward needed, no context history required.
+        Hidden-state mode: O(n) — run WM on recent token context to get hidden states.
+
+        Both modes maintain token_history / action_history so the replay buffer
+        receives proper sequences for imagination seeding.
+        """
+        # Always maintain history for replay buffer seeding
         token_history.append(tokens.cpu())
-        
-        # Keep last seed_context_len timesteps
         max_ctx = self.config['policy']['seed_context_len']
         if len(token_history) > max_ctx:
-            token_history = token_history[-max_ctx:]
+            token_history  = token_history[-max_ctx:]
             action_history = action_history[-max_ctx:]
-        
-        # Pad actions to match tokens length (last action unknown, use 0)
         while len(action_history) < len(token_history):
             action_history.append(0)
-        
-        # Build tensors
-        ctx_tokens = torch.stack(token_history).unsqueeze(0).to(self.device)   # (1, T, 3)
-        ctx_actions = torch.tensor(action_history).unsqueeze(0).to(self.device) # (1, T)
-        
-        # Run frozen WM forward
-        with torch.no_grad():
-            x = self.world_model.embedding(ctx_tokens, ctx_actions)
-            mask = self.world_model._get_mask(x.size(1), x.device)
-            for block in self.world_model.blocks:
-                x = block(x, mask=mask)
-            x = self.world_model.ln_final(x)
-            
-            # Extract last timestep's L0, L1, L2 hidden states
-            t = ctx_tokens.size(1)
-            last_start = (t - 1) * 4
-            hidden = x[:, last_start:last_start+3, :]  # (1, 3, 384)
-            
-        feature = self.feature_extractor(hidden)  # (1, 1152)
+
+        is_visual = getattr(self.feature_extractor, 'is_visual_mode', False)
+
+        if is_visual:
+            # Direct decode — no WM forward, no context needed for the feature
+            tok     = tokens.unsqueeze(0).to(self.device)     # (1, 3)
+            feature = self.feature_extractor(tok)             # (1, feat_dim)
+        else:
+            # Run frozen WM on recent context to get transformer hidden states
+            ctx_tokens  = torch.stack(token_history).unsqueeze(0).to(self.device)   # (1, T, 3)
+            ctx_actions = torch.tensor(action_history).unsqueeze(0).to(self.device) # (1, T)
+            with torch.no_grad():
+                x    = self.world_model.embedding(ctx_tokens, ctx_actions)
+                mask = self.world_model._get_mask(x.size(1), x.device)
+                for block in self.world_model.blocks:
+                    x = block(x, mask=mask)
+                x = self.world_model.ln_final(x)
+                t          = ctx_tokens.size(1)
+                last_start = (t - 1) * 4
+                hidden     = x[:, last_start:last_start + 3, :]  # (1, 3, d_model)
+            feature = self.feature_extractor(hidden)              # (1, feat_dim)
+
         return feature, token_history, action_history

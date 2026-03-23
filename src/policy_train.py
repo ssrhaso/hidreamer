@@ -27,7 +27,9 @@ from encoder_v1 import AtariCNNEncoder
 
 from policy import (
     ActorNetwork, CriticNetwork, RewardNetwork, ContinueNetwork,
-    HierarchicalFeatureExtractor, HiddenStateFeatureExtractor,count_policy_params,
+    HierarchicalFeatureExtractor, HiddenStateFeatureExtractor,
+    VisualEncoder, VisualFeatureExtractor,
+    count_policy_params,
 )
 from imagination import ImagineRollout
 from replay_buffer import TokenReplayBuffer
@@ -190,21 +192,49 @@ def build_trainable_networks(
     """
     
     policy_config = config['policy']
-    mode = policy_config.get('feature_mode', 'hidden_state')    
-    
-    # 1. HIDDEN STATE FEATURE EXTRACTOR
-    if mode == 'hidden_state':
+    mode = policy_config.get('feature_mode', 'hidden_state')
+
+    # 1. FEATURE EXTRACTOR — three supported modes:
+    #    'hidden_state'  — transformer hidden states → trainable projection (default)
+    #    'visual'        — tokens → frozen decoder → CNN (IRIS-style, this branch)
+    #    'concat'/'attention' — legacy codebook lookup modes
+
+    if mode == 'visual':
+        # Load pre-trained, frozen frame decoder
+        from decoder import FrameDecoder
+        decoder_path = policy_config.get('decoder_checkpoint', 'checkpoints/decoder_best.pt')
+        print(f"\n  Loading pre-trained decoder from {decoder_path}...")
+        decoder = FrameDecoder(emb_dim=384, base_ch=128).to(device)
+        ck = torch.load(decoder_path, map_location=device, weights_only=False)
+        decoder.load_state_dict(ck['model_state_dict'])
+        decoder.eval()
+        for p in decoder.parameters():
+            p.requires_grad = False
+        print(f"  Decoder loaded and FROZEN  (val_loss={ck.get('val_loss', '?'):.5f})")
+
+        # Trainable CNN visual encoder (operates on decoded multi-scale frames)
+        visual_feat_dim = policy_config.get('visual_feature_dim', 512)
+        visual_encoder  = VisualEncoder(input_channels=3, feat_dim=visual_feat_dim).to(device)
+
+        # Combined extractor: tokens → decode → CNN
+        feature_extractor = VisualFeatureExtractor(
+            hrvq_tokenizer = hrvq,
+            decoder        = decoder,
+            visual_encoder = visual_encoder,
+        ).to(device)
+
+    elif mode == 'hidden_state':
         feature_extractor = HiddenStateFeatureExtractor(
-            d_model = 384,
+            d_model        = 384,
             use_projection = True,
         ).to(device)
-    
-    else: 
-        # ARCHIVE FEATURE EXTRACTOR (Frozen HRVQ codebooks)
+
+    else:
+        # Legacy codebook-lookup modes ('concat', 'attention')
         feature_extractor = HierarchicalFeatureExtractor(
             hrvq_tokenizer = hrvq,
-            mode = mode,
-            d_model = 384,
+            mode           = mode,
+            d_model        = 384,
         ).to(device)
     
    

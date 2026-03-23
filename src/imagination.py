@@ -280,13 +280,19 @@ class ImagineRollout:
             
             x = self.world_model.ln_final(x)
             
-            # EXTRACT HIDDEN STATE for LAST timestep's L0, L1 and L2 positions
-            
-            t_current = tokens_context.size(1)
-            last_start = (t_current - 1) * 4
-            current_hidden = x[:, last_start:last_start+3, :]  # (B, 3, d_model)
-            
-            feature = self.feature_extractor(current_hidden)
+            # EXTRACT FEATURE for current state
+            # Visual mode:       last token in context → decode → CNN
+            # Hidden-state mode: WM hidden states → projection
+            is_visual = getattr(self.feature_extractor, 'is_visual_mode', False)
+            if is_visual:
+                # Use last token in current context as current-state tokens
+                current_tok = tokens_context[:, -1, :]           # (B, 3)
+                feature = self.feature_extractor(current_tok)
+            else:
+                t_current  = tokens_context.size(1)
+                last_start = (t_current - 1) * 4
+                current_hidden = x[:, last_start:last_start + 3, :]  # (B, 3, d_model)
+                feature = self.feature_extractor(current_hidden)
             
             # ACTOR PICKS ACTION  - from feature
             distribution = self.actor_network(feature)
@@ -321,17 +327,19 @@ class ImagineRollout:
             traj_continues[:, h] = continue_prob
         
         # BOOTSTRAP VALUES
-        x = self.world_model.embedding(tokens_context, actions_context)
-        mask = self.world_model._get_mask(x.size(1), x.device)
-        
-        for block in self.world_model.blocks:
-            x = block(x, mask = mask)
-        
-        x = self.world_model.ln_final(x)
-        t_final = tokens_context.size(1)
-        last_start = (t_final - 1) * 4
-        final_hidden = x[:, last_start:last_start+3, :]
-        final_feature = self.feature_extractor(final_hidden)
+        is_visual_orig = getattr(self.feature_extractor, 'is_visual_mode', False)
+        if is_visual_orig:
+            final_feature = self.feature_extractor(tokens_context[:, -1, :])
+        else:
+            x = self.world_model.embedding(tokens_context, actions_context)
+            mask = self.world_model._get_mask(x.size(1), x.device)
+            for block in self.world_model.blocks:
+                x = block(x, mask=mask)
+            x = self.world_model.ln_final(x)
+            t_final    = tokens_context.size(1)
+            last_start = (t_final - 1) * 4
+            final_hidden  = x[:, last_start:last_start + 3, :]
+            final_feature = self.feature_extractor(final_hidden)
         last_value = self.critic_network(final_feature)
         
         # RETURN TRAJECTORY
@@ -364,21 +372,28 @@ class ImagineRollout:
         max_timesteps = self.world_model.config.max_seq_len // 4
         assert t_seed + H <= max_timesteps
         
-        #  PHASE 1: Prime KV cache with seed context  + extract initial hidden stats 
-        
-        
+        #  PHASE 1: Prime KV cache with seed context + extract initial features
+
         _, _, _, kv_cache, x_full = self.world_model.forward_with_kv(
             seed_tokens, seed_actions
         )
-        
-        cached_seq_len = t_seed * 4
-        
-        # EXTRACT HIDDEN STATES FOR LAST SEED TIMESTEP (pos L0, L1, L2)
-        # x_full is (B, t_seed*4, d_model) - we want the last 3 positions for the new timestep
-        next_hidden = x_full[:, -3:, :]  # (B, 3, d_model)
 
-        last_t_start = (t_seed - 1) * 4
-        current_hidden = x_full[:, last_t_start:last_t_start+3, :]  # (B, 3, d_model)
+        cached_seq_len = t_seed * 4
+
+        # VISUAL MODE: initial feature comes from the LAST seed token via decode→CNN.
+        # HIDDEN STATE MODE: initial feature comes from the WM hidden state at the last
+        # seed timestep (positions L0, L1, L2 after ln_final).
+        is_visual = getattr(self.feature_extractor, 'is_visual_mode', False)
+
+        if is_visual:
+            current_tokens = seed_tokens[:, -1, :]    # (B, 3) — last seed token
+            current_hidden = None                      # not used in visual mode
+        else:
+            last_t_start   = (t_seed - 1) * 4
+            current_hidden = x_full[:, last_t_start:last_t_start + 3, :]  # (B, 3, d_model)
+            current_tokens = None                      # not used in hidden-state mode
+
+        next_hidden = x_full[:, -3:, :]  # kept for compatibility (hidden-state only)
         
         # ALLOCATE STORAGE FOR ROLLOUT TRAJECTORY
         
@@ -392,13 +407,17 @@ class ImagineRollout:
         traj_continues  = torch.zeros(batch_size, H, dtype=torch.float, device=self.device)
         
         last_cached_tokens = seed_tokens[:, -1:, :]  # (B, 1, 3)
-        
-        #  PHASE 2: Imagination rollout 
+
+        #  PHASE 2: Imagination rollout
         for h in range(H):
-            
-            # FEATURE FROM Transformer Hidden State (not  codebook lookup)
-            
-            feature = self.feature_extractor(current_hidden)    # B, 1152
+
+            # FEATURE EXTRACTION — dispatches on mode:
+            # Visual:       tokens → codebook embeds → decoder → CNN  (B, feat_dim)
+            # Hidden-state: WM hidden states → projection              (B, feat_dim)
+            if is_visual:
+                feature = self.feature_extractor(current_tokens)  # (B, feat_dim)
+            else:
+                feature = self.feature_extractor(current_hidden)  # (B, feat_dim)
             
             # ACTOR PICKS ACTION  - from feature
             distribution = self.actor_network(feature)
@@ -429,7 +448,10 @@ class ImagineRollout:
             
             # UPDATE STEP for next iteration
             last_cached_tokens = predicted_tokens.unsqueeze(1)  # (B, 1, 3)
-            current_hidden = next_hidden  # (B, 3, d_model)
+            if is_visual:
+                current_tokens = predicted_tokens     # (B, 3) — decoded next step
+            else:
+                current_hidden = next_hidden          # (B, 3, d_model)
             
             # STORE TRAJECTORY STEP
             
@@ -442,8 +464,11 @@ class ImagineRollout:
             traj_rewards[:, h] = reward
             traj_continues[:, h] = continue_prob
         
-        #  BOOTSTRAP VALUES
-        final_feature = self.feature_extractor(current_hidden)
+        #  BOOTSTRAP VALUES — same dispatch as per-step feature extraction
+        if is_visual:
+            final_feature = self.feature_extractor(current_tokens)
+        else:
+            final_feature = self.feature_extractor(current_hidden)
         last_value = self.critic_network(final_feature)
         
         return Trajectory(
