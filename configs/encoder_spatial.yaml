@@ -13,9 +13,14 @@ model:
   input_channels: 4         # Stacked grayscale frames
 
 tokenizer:
-  num_codes: 256            # Codebook size per level
-  # Commitment costs raised vs defaults: EMA already handles codebook update,
-  # high commitment cost pushes encoder to commit to spread-out codes.
+  # Per-level codebook sizes — matched to the number of patches:
+  #   L0: 4 patches/frame  → 16 codes  (16^4 = 65k frame states)
+  #   L1: 16 patches/frame → 64 codes  (64^16 ≈ 10^29 frame states)
+  #   L2: 16 patches/frame → 64 codes
+  # 256 codes per level was absurd relative to patch count and caused collapse.
+  num_codes_l0: 16
+  num_codes_l1: 64
+  num_codes_l2: 64
   commitment_costs: [0.25, 0.5, 1.0]   # [l0, l1, l2] — higher = stronger anti-collapse
   decay: 0.99               # EMA decay for codebook update
   epsilon: 1.0e-5
@@ -50,7 +55,7 @@ kmeans_init:
 
 training:
   seed: 42
-  batch_size: 64            # Frames per batch (not sequences)
+  batch_size: 64            # Frames per batch — reduced from 128 to avoid OOM at epoch 4
   num_epochs: 30
   learning_rate: 3.0e-4
   weight_decay: 0.01

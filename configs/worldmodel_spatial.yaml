@@ -16,7 +16,10 @@ model:
   d_ff: 1536                # FFN width (4 × d_model)
   dropout: 0.1
   max_seq_len: 592          # 16 context timesteps × 37 tokens/timestep
-  num_codes: 256            # Codebook size (must match SpatialHRVQTokenizer)
+  # Per-level codebook sizes — must match SpatialHRVQTokenizer / encoder_spatial.yaml
+  num_codes_l0: 16
+  num_codes_l1: 64
+  num_codes_l2: 64
   num_actions: 9            # Max actions across Pong/Breakout/MsPacman
 
   # Hierarchical prediction loss weights

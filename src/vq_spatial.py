@@ -54,8 +54,11 @@ class SpatialHRVQTokenizer(nn.Module):
     ----------
     d_model : int
         Patch embedding dimension (must match SpatialAtariEncoder.d_model).
-    num_codes : int
-        Codebook size per level (default 256).
+    num_codes_l0 / num_codes_l1 / num_codes_l2 : int
+        Per-level codebook sizes.  Smaller codebooks are appropriate because
+        each level sees far fewer distinct patches than 256:
+          L0 has only 4 patches/frame  → 16 codes is already 16^4 = 65k states
+          L1/L2 have 16 patches/frame  → 64 codes gives 64^16 ≈ 10^29 states
     commitment_costs : list[float]
         Per-level commitment costs [l0, l1, l2].
     revival_interval : int
@@ -68,7 +71,9 @@ class SpatialHRVQTokenizer(nn.Module):
     def __init__(
         self,
         d_model: int = 384,
-        num_codes: int = 256,
+        num_codes_l0: int = 16,
+        num_codes_l1: int = 64,
+        num_codes_l2: int = 64,
         commitment_costs: list = None,
         decay: float = 0.99,
         epsilon: float = 1e-5,
@@ -77,7 +82,11 @@ class SpatialHRVQTokenizer(nn.Module):
     ):
         super().__init__()
         self.d_model = d_model
-        self.num_codes = num_codes
+        self.num_codes_l0 = num_codes_l0
+        self.num_codes_l1 = num_codes_l1
+        self.num_codes_l2 = num_codes_l2
+        # Keep a single .num_codes alias for callers that only need one value
+        self.num_codes = max(num_codes_l0, num_codes_l1, num_codes_l2)
         self.revival_interval = revival_interval
         self.revival_noise = revival_noise
 
@@ -86,7 +95,7 @@ class SpatialHRVQTokenizer(nn.Module):
 
         # Separate VQ layer per spatial level
         self.vq_l0 = VQVAE(
-            num_codebook_entries=num_codes,
+            num_codebook_entries=num_codes_l0,
             codebook_dim=d_model,
             commitment_cost=commitment_costs[0],
             decay=decay,
@@ -94,7 +103,7 @@ class SpatialHRVQTokenizer(nn.Module):
             layer_idx=0,
         )
         self.vq_l1 = VQVAE(
-            num_codebook_entries=num_codes,
+            num_codebook_entries=num_codes_l1,
             codebook_dim=d_model,
             commitment_cost=commitment_costs[1],
             decay=decay,
@@ -102,7 +111,7 @@ class SpatialHRVQTokenizer(nn.Module):
             layer_idx=1,
         )
         self.vq_l2 = VQVAE(
-            num_codebook_entries=num_codes,
+            num_codebook_entries=num_codes_l2,
             codebook_dim=d_model,
             commitment_cost=commitment_costs[2],
             decay=decay,
@@ -111,12 +120,10 @@ class SpatialHRVQTokenizer(nn.Module):
         )
 
         # --- Dead-code tracking ---
-        # Assignment counts accumulated over the current revival window.
-        # Registered as buffers so they move with .to(device) and are
-        # included in state_dict (revival state survives checkpointing).
-        self.register_buffer('_usage_l0', torch.zeros(num_codes, dtype=torch.long))
-        self.register_buffer('_usage_l1', torch.zeros(num_codes, dtype=torch.long))
-        self.register_buffer('_usage_l2', torch.zeros(num_codes, dtype=torch.long))
+        # Separate buffer per level because sizes differ.
+        self.register_buffer('_usage_l0', torch.zeros(num_codes_l0, dtype=torch.long))
+        self.register_buffer('_usage_l1', torch.zeros(num_codes_l1, dtype=torch.long))
+        self.register_buffer('_usage_l2', torch.zeros(num_codes_l2, dtype=torch.long))
 
         # Step counter (plain int — resets harmlessly on checkpoint resume)
         self._train_step = 0
@@ -293,16 +300,18 @@ class SpatialHRVQTokenizer(nn.Module):
 
     def get_codebook_usage(self, token_dict: dict) -> dict:
         """Return per-level codebook utilisation stats."""
+        totals = {'l0': self.num_codes_l0, 'l1': self.num_codes_l1, 'l2': self.num_codes_l2}
         stats = {}
         for key in ['l0', 'l1', 'l2']:
             tokens = token_dict[key]
             if isinstance(tokens, torch.Tensor):
                 tokens = tokens.cpu().numpy()
             unique = len(np.unique(tokens.reshape(-1)))
+            total = totals[key]
             stats[key] = {
                 'unique_codes': unique,
-                'total_codes': self.num_codes,
-                'usage_pct': 100.0 * unique / self.num_codes,
+                'total_codes': total,
+                'usage_pct': 100.0 * unique / total,
             }
         return stats
 
@@ -317,7 +326,7 @@ if __name__ == "__main__":
 
     B = 4
     encoder = SpatialAtariEncoder(input_channels=4, d_model=384)
-    tokenizer = SpatialHRVQTokenizer(d_model=384, num_codes=256)
+    tokenizer = SpatialHRVQTokenizer(d_model=384, num_codes_l0=16, num_codes_l1=64, num_codes_l2=64)
 
     params = sum(p.numel() for p in tokenizer.parameters() if p.requires_grad)
     print(f"Tokenizer parameters: {params:,}")
@@ -325,6 +334,11 @@ if __name__ == "__main__":
     x = torch.randint(0, 256, (B, 4, 84, 84)).float()
     spatial_feats = encoder(x)
 
+    # Encode in eval mode first (codebook frozen) so we can assert determinism
+    tokenizer.eval()
+    token_dict_eval = tokenizer.encode(spatial_feats)
+
+    # Training forward (EMA updates codebook — results will differ from eval above)
     tokenizer.train()
     token_dict, vq_loss, quant_dict = tokenizer(spatial_feats)
 
@@ -342,11 +356,11 @@ if __name__ == "__main__":
     assert quant_dict['l1'].shape == (B, 16, 384)
     assert quant_dict['l2'].shape == (B, 16, 384)
 
-    # Encode (no grad) — switch to eval to freeze codebook for comparison
+    # Verify eval encode is deterministic (two consecutive eval passes agree)
     tokenizer.eval()
     token_dict2 = tokenizer.encode(spatial_feats)
     tokenizer.train()
-    assert (token_dict2['l0'] == token_dict['l0']).all()
+    assert (token_dict2['l0'] == token_dict_eval['l0']).all(), "Eval encode not deterministic"
 
     # Decode
     recon = tokenizer.decode(token_dict)

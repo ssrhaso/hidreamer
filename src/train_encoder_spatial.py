@@ -410,11 +410,11 @@ def measure_codebook_usage(
         for key in ['l0', 'l1', 'l2']:
             used[key].update(tokens[key].cpu().numpy().flatten().tolist())
 
-    num_codes = tokenizer.num_codes
+    totals = {'l0': tokenizer.num_codes_l0, 'l1': tokenizer.num_codes_l1, 'l2': tokenizer.num_codes_l2}
     stats = {
         key: {
             'unique': len(used[key]),
-            'pct':    100.0 * len(used[key]) / num_codes,
+            'pct':    100.0 * len(used[key]) / totals[key],
         }
         for key in ['l0', 'l1', 'l2']
     }
@@ -451,7 +451,9 @@ def train(config_path: str, use_wandb: bool = False, device_str: str = 'cuda'):
 
     tokenizer = SpatialHRVQTokenizer(
         d_model=d_model,
-        num_codes=config['tokenizer']['num_codes'],
+        num_codes_l0=config['tokenizer']['num_codes_l0'],
+        num_codes_l1=config['tokenizer']['num_codes_l1'],
+        num_codes_l2=config['tokenizer']['num_codes_l2'],
         commitment_costs=config['tokenizer']['commitment_costs'],
         decay=config['tokenizer']['decay'],
         epsilon=config['tokenizer']['epsilon'],

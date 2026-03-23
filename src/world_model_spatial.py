@@ -65,7 +65,9 @@ class SpatialWorldModelConfig:
     d_ff:      int   = 1536
     dropout:   float = 0.1
     max_seq_len: int = 592       # 16 context timesteps × 37 tokens/timestep
-    num_codes: int   = 256       # Codebook size (same for all levels)
+    num_codes_l0: int = 16       # Must match SpatialHRVQTokenizer / encoder_spatial.yaml
+    num_codes_l1: int = 64
+    num_codes_l2: int = 64
     num_actions: int = 9
 
     # Loss weights per level
@@ -92,7 +94,9 @@ class SpatialWorldModelConfig:
             d_ff=m['d_ff'],
             dropout=m['dropout'],
             max_seq_len=m['max_seq_len'],
-            num_codes=m['num_codes'],
+            num_codes_l0=m['num_codes_l0'],
+            num_codes_l1=m['num_codes_l1'],
+            num_codes_l2=m['num_codes_l2'],
             num_actions=m['num_actions'],
             l0_weight=m.get('l0_weight', 1.0),
             l1_weight=m.get('l1_weight', 0.5),
@@ -106,7 +110,8 @@ class SpatialWorldModelConfig:
             f"n_heads={self.n_heads}, d_ff={self.d_ff}\n"
             f"  max_seq_len={self.max_seq_len} "
             f"({self.max_seq_len // TOKENS_PER_TIMESTEP} timesteps × {TOKENS_PER_TIMESTEP} tokens)\n"
-            f"  num_codes={self.num_codes}, num_actions={self.num_actions}\n"
+            f"  num_codes=[l0:{self.num_codes_l0}, l1:{self.num_codes_l1}, l2:{self.num_codes_l2}]  "
+            f"num_actions={self.num_actions}\n"
             f"  level_weights=[{self.l0_weight}, {self.l1_weight}, {self.l2_weight}]"
         )
 
@@ -130,10 +135,10 @@ class SpatialTokenEmbedding(nn.Module):
         self.config = config
         D = config.d_model
 
-        # Token lookup tables — each level has its own
-        self.l0_embed  = nn.Embedding(config.num_codes,   D)
-        self.l1_embed  = nn.Embedding(config.num_codes,   D)
-        self.l2_embed  = nn.Embedding(config.num_codes,   D)
+        # Token lookup tables — each level has its own, sized to its codebook
+        self.l0_embed  = nn.Embedding(config.num_codes_l0, D)
+        self.l1_embed  = nn.Embedding(config.num_codes_l1, D)
+        self.l2_embed  = nn.Embedding(config.num_codes_l2, D)
         self.act_embed = nn.Embedding(config.num_actions, D)
 
         # Level-type embedding (4 types: L0, L1, L2, action)
@@ -338,10 +343,10 @@ class SpatialHierarchicalWorldModel(nn.Module):
 
         self.ln_final = nn.LayerNorm(config.d_model)
 
-        # Output heads — one per spatial level
-        self.head_l0 = nn.Linear(config.d_model, config.num_codes)
-        self.head_l1 = nn.Linear(config.d_model, config.num_codes)
-        self.head_l2 = nn.Linear(config.d_model, config.num_codes)
+        # Output heads — one per spatial level, sized to its codebook
+        self.head_l0 = nn.Linear(config.d_model, config.num_codes_l0)
+        self.head_l1 = nn.Linear(config.d_model, config.num_codes_l1)
+        self.head_l2 = nn.Linear(config.d_model, config.num_codes_l2)
 
         # Mask cache
         self._cached_mask = None
@@ -684,7 +689,7 @@ if __name__ == "__main__":
     config = SpatialWorldModelConfig(
         d_model=128, n_layers=2, n_heads=4, d_ff=256,
         max_seq_len=T * TOKENS_PER_TIMESTEP,
-        num_codes=256, num_actions=6,
+        num_codes_l0=16, num_codes_l1=64, num_codes_l2=64, num_actions=6,
     )
     print(f"\n{config}")
     print(f"\nTOKENS_PER_TIMESTEP: {TOKENS_PER_TIMESTEP}")
@@ -694,9 +699,9 @@ if __name__ == "__main__":
     print(f"\nParameters: {model.count_parameters():,}")
 
     # Random token inputs
-    tok_l0 = torch.randint(0, 256, (B, T, NUM_L0))
-    tok_l1 = torch.randint(0, 256, (B, T, NUM_L1))
-    tok_l2 = torch.randint(0, 256, (B, T, NUM_L2))
+    tok_l0 = torch.randint(0, config.num_codes_l0, (B, T, NUM_L0))
+    tok_l1 = torch.randint(0, config.num_codes_l1, (B, T, NUM_L1))
+    tok_l2 = torch.randint(0, config.num_codes_l2, (B, T, NUM_L2))
     acts   = torch.randint(0, 6,   (B, T))
 
     out = model(tok_l0, tok_l1, tok_l2, acts)
@@ -707,9 +712,9 @@ if __name__ == "__main__":
     print(f"  logits_l2: {list(out['logits_l2'].shape)}")
 
     assert out['hidden'].shape    == (B, T * TOKENS_PER_TIMESTEP, 128)
-    assert out['logits_l0'].shape == (B, T, NUM_L0, 256)
-    assert out['logits_l1'].shape == (B, T, NUM_L1, 256)
-    assert out['logits_l2'].shape == (B, T, NUM_L2, 256)
+    assert out['logits_l0'].shape == (B, T, NUM_L0, config.num_codes_l0)
+    assert out['logits_l1'].shape == (B, T, NUM_L1, config.num_codes_l1)
+    assert out['logits_l2'].shape == (B, T, NUM_L2, config.num_codes_l2)
 
     # Loss computation
     loss, info = model.compute_loss(
