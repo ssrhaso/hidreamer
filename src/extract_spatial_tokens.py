@@ -35,11 +35,8 @@ from encoder_v2 import SpatialAtariEncoder
 from vq_spatial import SpatialHRVQTokenizer
 
 
-# ---------------------------------------------------------------------------
 # Loading helpers
-# ---------------------------------------------------------------------------
 def load_models(checkpoint_path: str, config: dict, device: torch.device):
-    """Load trained encoder + tokenizer from checkpoint."""
     d_model = config['model']['d_model']
 
     encoder = SpatialAtariEncoder(
@@ -49,13 +46,13 @@ def load_models(checkpoint_path: str, config: dict, device: torch.device):
 
     tokenizer = SpatialHRVQTokenizer(
         d_model=d_model,
-        num_codes_l0=config["tokenizer"]["num_codes_l0"],
-        num_codes_l1=config["tokenizer"]["num_codes_l1"],
-        num_codes_l2=config["tokenizer"]["num_codes_l2"],
+        num_codes_l0=config['tokenizer']['num_codes_l0'],
+        num_codes_l1=config['tokenizer']['num_codes_l1'],
+        num_codes_l2=config['tokenizer']['num_codes_l2'],
         commitment_costs=config['tokenizer']['commitment_costs'],
         decay=config['tokenizer']['decay'],
         epsilon=config['tokenizer']['epsilon'],
-        use_gradient_vq=True,
+        use_gradient_vq=config['training'].get('use_gradient_vq', False),
     ).to(device)
 
     ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
@@ -123,9 +120,7 @@ def load_game_data(replay_dir: str, game: str):
     return obs, actions, rewards, dones
 
 
-# ---------------------------------------------------------------------------
 # Token extraction
-# ---------------------------------------------------------------------------
 @torch.no_grad()
 def extract_tokens_for_game(
     encoder: SpatialAtariEncoder,
@@ -166,24 +161,25 @@ def extract_tokens_for_game(
     return all_l0, all_l1, all_l2
 
 
-def print_codebook_stats(tokens_l0, tokens_l1, tokens_l2, num_codes=256):
-    """Print codebook utilisation per level."""
-    for name, tokens in [('L0', tokens_l0), ('L1', tokens_l1), ('L2', tokens_l2)]:
-        unique = len(np.unique(tokens.reshape(-1)))
-        print(f"  {name}: {unique}/{num_codes} codes ({100*unique/num_codes:.1f}%) used")
+def print_codebook_stats(tokens_l0, tokens_l1, tokens_l2,
+                         num_codes_l0, num_codes_l1, num_codes_l2):
+    sizes = [('L0', tokens_l0, num_codes_l0),
+             ('L1', tokens_l1, num_codes_l1),
+             ('L2', tokens_l2, num_codes_l2)]
 
-    # Check that different spatial patches use different codes
-    # (if all patches collapse to the same code, the encoder is still degenerate)
-    for name, tokens in [('L0', tokens_l0), ('L1', tokens_l1), ('L2', tokens_l2)]:
-        # Variance across patch dimension (should be > 0 if spatial info is preserved)
+    for name, tokens, nc in sizes:
+        unique = len(np.unique(tokens.reshape(-1)))
+        print(f"  {name}: {unique}/{nc} codes ({100*unique/nc:.1f}%) used")
+
+    # Inter-patch variance: should be > 0 if spatial info is preserved.
+    # If all patches in a frame get the same token, the encoder is still degenerate.
+    for name, tokens, _ in sizes:
         patch_var = tokens.astype(float).var(axis=1).mean()
         print(f"  {name} inter-patch variance: {patch_var:.2f}  "
               f"(>0 = spatial info preserved)")
 
 
-# ---------------------------------------------------------------------------
 # Main
-# ---------------------------------------------------------------------------
 def main():
     parser = argparse.ArgumentParser(description='Extract spatial tokens')
     parser.add_argument('--checkpoint', type=str,
@@ -211,28 +207,26 @@ def main():
     encoder, tokenizer = load_models(args.checkpoint, config, device)
 
     output_dir = Path(args.output_dir)
-    num_codes_l0 = config["tokenizer"]["num_codes_l0"]
-    num_codes_l1 = config["tokenizer"]["num_codes_l1"]
-    num_codes_l2 = config["tokenizer"]["num_codes_l2"]
+    num_codes_l0 = config['tokenizer']['num_codes_l0']
+    num_codes_l1 = config['tokenizer']['num_codes_l1']
+    num_codes_l2 = config['tokenizer']['num_codes_l2']
 
     for game in args.games:
         print(f"\n{'='*50}")
         print(f"Processing: {game}")
         print(f"{'='*50}")
 
-        # Load observations
         obs, actions, rewards, dones = load_game_data(args.replay_dir, game)
 
-        # Extract tokens
         tokens_l0, tokens_l1, tokens_l2 = extract_tokens_for_game(
             encoder, tokenizer, obs,
             batch_size=args.batch_size,
             device=device,
         )
 
-        # Stats
         print(f"\nCodebook utilisation:")
-        print_codebook_stats(tokens_l0, tokens_l1, tokens_l2, max(num_codes_l0, num_codes_l1, num_codes_l2))
+        print_codebook_stats(tokens_l0, tokens_l1, tokens_l2,
+                             num_codes_l0, num_codes_l1, num_codes_l2)
 
         reward_counts = {
             'positive': (rewards > 0).sum(),
@@ -241,7 +235,6 @@ def main():
         }
         print(f"\nReward distribution: {reward_counts}")
 
-        # Save
         game_out = output_dir / game
         game_out.mkdir(parents=True, exist_ok=True)
 
