@@ -20,9 +20,9 @@ THREE FIXES (training objective only — architecture unchanged):
 
   3. K-means codebook initialisation
      Before epoch 1, encoder outputs from 100 random batches are collected and
-     a random subset of 256 is used to initialise each VQ layer's codebook.
-     This puts the codebook in the right neighbourhood from the start and avoids
-     the all-background degenerate fixed point.
+     a random subset of num_codebook_entries is used to initialise each VQ layer's
+     codebook.  This puts the codebook in the right neighbourhood from the start
+     and avoids the all-background degenerate fixed point.
 
 Usage:
     python src/train_encoder_spatial.py --config configs/encoder_spatial.yaml
@@ -48,13 +48,11 @@ from encoder_v2 import SpatialAtariEncoder
 from vq_spatial import SpatialHRVQTokenizer
 
 
-# ---------------------------------------------------------------------------
-# Dataset — returns raw uint8 frames (needed for foreground mask)
-# ---------------------------------------------------------------------------
+# Dataset — returns float32 [0,1] frames
 class AtariFrameDataset(torch.utils.data.Dataset):
     """
     Loads frames from data/{game}/frames.npy — shape (N, 4, 84, 84) uint8.
-    Returns float32 [0,1] tensors AND the raw uint8 frame for fg-mask computation.
+    Returns float32 [0,1] tensors.
     """
 
     def __init__(self, replay_dir: str, games: list, max_frames_per_game: int = 100_000):
@@ -117,9 +115,7 @@ def build_dataloaders(config: dict, batch_size: int):
     return train_loader, val_loader, dataset
 
 
-# ---------------------------------------------------------------------------
 # Training-only auxiliary pixel head
-# ---------------------------------------------------------------------------
 class PixelAuxHead(nn.Module):
     """
     Predicts mean pixel brightness of a spatial patch from its embedding.
@@ -130,13 +126,10 @@ class PixelAuxHead(nn.Module):
         self.linear = nn.Linear(d_model, 1)
 
     def forward(self, feats: torch.Tensor) -> torch.Tensor:
-        """feats: (B, N, d_model) → (B, N) predicted mean pixel [0,1]"""
         return torch.sigmoid(self.linear(feats)).squeeze(-1)
 
 
-# ---------------------------------------------------------------------------
 # Foreground mask utilities
-# ---------------------------------------------------------------------------
 def compute_fg_masks(
     frames: torch.Tensor,    # (B, 4, 84, 84) float32 [0,1]
     fg_threshold: float,
@@ -182,9 +175,7 @@ def compute_patch_mean_pixels(
     return {'l0': p_l0, 'l1': p_l1, 'l2': p_l1}  # L1 and L2 share same 4×4 target
 
 
-# ---------------------------------------------------------------------------
 # Loss functions
-# ---------------------------------------------------------------------------
 def weighted_per_patch_mse(
     feats_enc: torch.Tensor,    # (B, N, D)
     feats_q:   torch.Tensor,    # (B, N, D)
@@ -275,7 +266,6 @@ def token_entropy_loss_fn(
         feats = encoder_feats[key]   # (B, N, D)
         B, N, D = feats.shape
         flat = feats.reshape(B * N, D)
-        
 
         # Squared distances: (B*N, num_codes)
         dists = (
@@ -314,6 +304,9 @@ def codebook_diversity_loss(
     Computes soft assignment distribution over the codebook for each patch in
     the batch.  Low entropy = few codes used = penalty is high.
     Returns a value in [0, 1]: 0 = fully spread, 1 = all patches → same code.
+
+    Uses feats.detach() — no gradient flows to the encoder, only to the codebook
+    weights (relevant for GradientVQ; no effect at all for EMA VQ).
     """
     B, N, D = feats.shape
     flat = feats.detach().reshape(-1, D)      # (B*N, D) — no grad through this term
@@ -354,9 +347,9 @@ def compute_loss(
     Full loss combining:
       1. Foreground-weighted commitment MSE (encoder ↔ codebook)
       2. Pixel auxiliary loss (predicting patch brightness via STE)
-      3. Codebook entropy diversity penalty (per-batch)
+      3. Codebook entropy diversity penalty (per-batch, no grad to encoder)
       4. Patch diversity loss (cosine sim between patches in same frame)
-      5. Token entropy loss (per-frame soft entropy)
+      5. Token entropy loss (per-frame soft entropy, grad flows to encoder)
     """
     l0_w      = cfg_loss['l0_weight']
     l1_w      = cfg_loss['l1_weight']
@@ -369,7 +362,7 @@ def compute_loss(
     patch_div_w = cfg_training.get('patch_diversity_weight', 0.0)
     ent_w       = cfg_training.get('entropy_weight', 0.0)
 
-    # --- Foreground masks and pixel targets ---
+    # Foreground masks and pixel targets
     fg = compute_fg_masks(frames, fg_thr)               # 'l0':(B,4), 'l1':(B,16)
     px_target = compute_patch_mean_pixels(frames)        # 'l0','l1','l2' each (B,N)
 
@@ -380,7 +373,7 @@ def compute_loss(
     pw_l0 = patch_w(fg['l0'])        # (B, 4)
     pw_l1 = patch_w(fg['l1'])        # (B, 16)
 
-    # --- 1. Foreground-weighted commitment MSE ---
+    # 1. Foreground-weighted commitment MSE
     mse_l0 = weighted_per_patch_mse(encoder_feats['l0'], quant_feats['l0'].detach(), pw_l0) \
             + weighted_per_patch_mse(quant_feats['l0'], encoder_feats['l0'].detach(), pw_l0)
     mse_l1 = weighted_per_patch_mse(encoder_feats['l1'], quant_feats['l1'].detach(), pw_l1) \
@@ -390,23 +383,23 @@ def compute_loss(
 
     commit_loss = l0_w * mse_l0 + l1_w * mse_l1 + l2_w * mse_l2 + vq_loss
 
-    # --- 2. Pixel auxiliary loss ---
+    # 2. Pixel auxiliary loss
     # gradient flows: quant_feats (STE) → pixel_head → MSE → encoder
     px_l0 = pixel_aux_loss(pixel_heads['l0'], quant_feats['l0'], px_target['l0'], pw_l0)
     px_l1 = pixel_aux_loss(pixel_heads['l1'], quant_feats['l1'], px_target['l1'], pw_l1)
     px_l2 = pixel_aux_loss(pixel_heads['l2'], quant_feats['l2'], px_target['l2'], pw_l1)
     aux_loss = l0_w * px_l0 + l1_w * px_l1 + l2_w * px_l2
 
-    # --- 3. Codebook entropy diversity penalty (per-batch) ---
+    # 3. Codebook entropy diversity penalty (per-batch, no grad to encoder)
     div_l0 = codebook_diversity_loss(tokenizer.vq_l0, encoder_feats['l0'], div_temp)
     div_l1 = codebook_diversity_loss(tokenizer.vq_l1, encoder_feats['l1'], div_temp)
     div_l2 = codebook_diversity_loss(tokenizer.vq_l2, encoder_feats['l2'], div_temp)
     div_loss = (div_l0 + div_l1 + div_l2) / 3.0
 
-    # --- 4. Patch diversity loss (cosine similarity between patches in same frame) ---
+    # 4. Patch diversity loss (cosine similarity between patches in same frame)
     patch_div = patch_diversity_loss_fn(encoder_feats)
 
-    # --- 5. Per-frame token entropy loss ---
+    # 5. Per-frame token entropy loss
     ent_loss = token_entropy_loss_fn(encoder_feats, tokenizer, temperature=div_temp)
 
     total = (
@@ -431,9 +424,7 @@ def compute_loss(
     return total, info
 
 
-# ---------------------------------------------------------------------------
 # K-means codebook initialisation
-# ---------------------------------------------------------------------------
 @torch.no_grad()
 def kmeans_init_codebooks(
     encoder:    SpatialAtariEncoder,
@@ -444,7 +435,7 @@ def kmeans_init_codebooks(
 ):
     """
     Collect encoder outputs from num_batches random batches and use a random
-    subset of 256 embeddings to initialise each VQ layer's codebook.
+    subset of num_codebook_entries embeddings to initialise each VQ layer's codebook.
 
     This breaks the all-background fixed point by starting the codebook in the
     data manifold rather than at the default uniform-random initialisation.
@@ -490,9 +481,7 @@ def kmeans_init_codebooks(
     encoder.train()
 
 
-# ---------------------------------------------------------------------------
 # Codebook utilisation measurement
-# ---------------------------------------------------------------------------
 @torch.no_grad()
 def measure_codebook_usage(
     encoder:   SpatialAtariEncoder,
@@ -501,10 +490,6 @@ def measure_codebook_usage(
     device:    torch.device,
     num_batches: int = 20,
 ) -> dict:
-    """
-    Run num_batches through the encoder+tokenizer in eval mode and return
-    the fraction of codebook entries that were assigned at least once.
-    """
     encoder.eval()
     tokenizer.eval()
 
@@ -532,9 +517,7 @@ def measure_codebook_usage(
     return stats
 
 
-# ---------------------------------------------------------------------------
 # Main training loop
-# ---------------------------------------------------------------------------
 def train(config_path: str, use_wandb: bool = False, device_str: str = 'cuda'):
     with open(config_path, 'r') as f:
         config = yaml.safe_load(f)
@@ -691,7 +674,7 @@ def train(config_path: str, use_wandb: bool = False, device_str: str = 'cuda'):
                                'entropy_l1': info['entropy_l1'],
                                'entropy_l2': info['entropy_l2']})
 
-        # --- Validation & codebook stats ---
+        # Validation & codebook stats
         if epoch % eval_every == 0:
             encoder.eval()
             tokenizer.eval()
@@ -761,7 +744,6 @@ def train(config_path: str, use_wandb: bool = False, device_str: str = 'cuda'):
         wandb.finish()
 
 
-# ---------------------------------------------------------------------------
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', type=str, default='configs/encoder_spatial.yaml')
