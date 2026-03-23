@@ -1,14 +1,9 @@
 """
-TRAIN POLICY — Entry point for Hi-Dreamer actor-critic training.
+TRAIN POLICY - ENTRY POINT FOR HI-DREAMER ACTOR-CRITIC TRAINING
 
 Usage:
-    python policy_train.py --config configs/policy.yaml --offline       # no env needed
-    python policy_train.py --config configs/policy.yaml --game Pong-v5  # joint training (default)
-
-Requires pre-trained frozen models:
-    - World model checkpoint
-    - HRVQ tokenizer checkpoint  
-    - CNN encoder checkpoint
+    python policy_train.py --config configs/policy.yaml --offline
+    python policy_train.py --config configs/policy.yaml --game Pong-v5
 """
 
 import os
@@ -18,7 +13,7 @@ import yaml
 import torch
 import numpy as np
 
-# Ensure src/ is on path
+# ENSURE SRC/ IS ON PATH
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from world_model import HierarchicalWorldModel, WorldModelConfig
@@ -27,7 +22,9 @@ from encoder_v1 import AtariCNNEncoder
 
 from policy import (
     ActorNetwork, CriticNetwork, RewardNetwork, ContinueNetwork,
-    HierarchicalFeatureExtractor, HiddenStateFeatureExtractor,count_policy_params,
+    HierarchicalFeatureExtractor, HiddenStateFeatureExtractor,
+    VisualEncoder, VisualFeatureExtractor,
+    count_policy_params,
 )
 from imagination import ImagineRollout
 from replay_buffer import TokenReplayBuffer
@@ -35,27 +32,27 @@ from actor_critic_train import ActorCriticTrainer
 
 
 def parse_args():
-    """ Parse command-line arguments for policy training."""
-    
+    """ PARSE COMMAND-LINE ARGUMENTS FOR POLICY TRAINING """
+
     parser = argparse.ArgumentParser(description = "Hi-Dreamer Policy Training")
     parser.add_argument("--config", type = str, default = "configs/policy.yaml")
-    parser.add_argument("--game", type = str, default = None, help="Override game from config")
+    parser.add_argument("--game", type = str, default = None)
     parser.add_argument("--device", type = str, default = "cuda")
     parser.add_argument("--wandb", action = "store_true", default = False)
-    parser.add_argument("--offline", action = "store_true", default = False, help = "Force offline mode (FROZEN World Model)")
-    parser.add_argument("--checkpoint", type = str, default = None, help = "Resume from checkpoint")
+    parser.add_argument("--offline", action = "store_true", default = False)
+    parser.add_argument("--checkpoint", type = str, default = None)
     parser.add_argument("--seed", type = int, default = 42)
     return parser.parse_args()
 
 def load_config(path: str) -> dict:
-    """Load configuration from YAML file."""
-    
+    """ LOAD CONFIGURATION FROM YAML FILE """
+
     with open(path, 'r') as f:
         return yaml.safe_load(f)
-    
+
 def load_offline_buffer(config: dict, game: str, device: torch.device) -> TokenReplayBuffer:
-    """Load pre-collected data into replay buffer."""
-    
+    """ LOAD PRE-COLLECTED DATA INTO REPLAY BUFFER """
+
     print(f"\nLoading offline buffer for {game}...")
     buffer = TokenReplayBuffer.from_numpy_data(
         tokens_dir=config['data']['tokens_dir'],
@@ -73,21 +70,15 @@ def load_frozen_models(
     device : torch.device,
     joint_training : bool = False,
 ):
-    """ LOAD pre-trained models
+    """ LOAD PRE-TRAINED FROZEN MODELS """
 
-    JOINT TRAINING MODE: World Model TRAINABLE ,
-    - World Model
-    - HRVQ Tokenizer
-    - CNN Encoder
-    """
-    
     paths = config['frozen_models']
-    
-    # 1. World Model
+
+    # 1. WORLD MODEL
     print("\nLoading frozen WORLD MODEL...")
     world_model_config = WorldModelConfig.from_yaml("configs/worldmodel.yaml")
     world_model = HierarchicalWorldModel(world_model_config).to(device)
-    
+
     world_model_checkpoint = torch.load(paths['world_model'], map_location=device, weights_only=False)
     world_model.load_state_dict(world_model_checkpoint['model_state_dict'])
 
@@ -95,43 +86,42 @@ def load_frozen_models(
 
     # CONDITIONAL FREEZING
     if joint_training:
-        world_model.eval() # START IN EVAL
+        world_model.eval()
         print(f"  World Model: {world_model_params:,} params (UNFROZEN for joint training)")
         print(f"  Initialised from epoch {world_model_checkpoint.get('epoch', '?')}, "
               f"val_loss={world_model_checkpoint.get('best_val_loss', '?')}")
-    
+
     else:
         # FULLY FREEZE
         world_model.eval()
 
         for p in world_model.parameters():
             p.requires_grad = False
-        
+
         world_model_params = sum(p.numel() for p in world_model.parameters())
         print(f"  World Model loaded with {world_model_params:,} parameters (FROZEN)")
         print(f"  Loaded from epoch {world_model_checkpoint.get('epoch', '?')}, val_loss={world_model_checkpoint.get('best_val_loss', '?')}")
-        
-    
-    # 2. HRVQ Tokenizer (ALWAYS FROZEN)
+
+
+    # 2. HRVQ TOKENIZER (ALWAYS FROZEN)
     print("\nLoading frozen HRVQ TOKENIZER...")
     hrvq = HRVQTokenizer(
         input_dim=384, num_codes_per_layer=256, num_layers=3,
         commitment_costs=[0.05, 0.25, 0.60],
     ).to(device)
-    
+
     hrvq.load_state_dict(torch.load(paths['hrvq_tokenizer'], map_location=device, weights_only=False))
     hrvq.eval()
-    
-    # FREEZE 
+
+    # FREEZE
     for p in hrvq.parameters():
         p.requires_grad = False
     print(f"  HRVQ Tokenizer loaded and FROZEN")
-    
-    # 3. CNN Encoder (ALWAYS FROZEN)
+
+    # 3. CNN ENCODER (ALWAYS FROZEN)
     print("\nLoading frozen CNN ENCODER...")
     encoder = AtariCNNEncoder(input_channels=4, embedding_dim=384).to(device)
-    
-    
+
     encoder_checkpoint = torch.load(paths['encoder'], map_location=device, weights_only=False)
     encoder.load_state_dict(encoder_checkpoint['model_state_dict'])
     encoder.eval()
@@ -141,21 +131,19 @@ def load_frozen_models(
         p.requires_grad_(False)
     encoder_params = sum(p.numel() for p in encoder.parameters())
     print(f"  CNN encoder: {encoder_params:,} params (FROZEN)")
-    
-    # NOTE: count_parameters() filters by requires_grad, so returns 0 after freezing, hence manual counting.
-    
+
     return world_model, hrvq, encoder
 
 def make_env(
     game : str,
     seed : int = 42
 ):
-    """ Create Gymnasium ALE environment with standard Atari preprocessing. """
-    
+    """ CREATE GYMNASIUM ALE ENVIRONMENT WITH STANDARD ATARI PREPROCESSING """
+
     try:
         import ale_py
         import gymnasium as gym
-        
+
         env_name = f"ALE/{game}"
         env = gym.make(env_name)
         env = gym.wrappers.AtariPreprocessing(
@@ -164,7 +152,7 @@ def make_env(
         )
         env = gym.wrappers.FrameStackObservation(env, stack_size=4)
         env.reset(seed=seed)
-        
+
         num_actions = env.action_space.n
         print(f"  Environment: {env_name}, {num_actions} actions")
         return env, num_actions
@@ -180,38 +168,55 @@ def build_trainable_networks(
     num_actions : int,
     device : torch.device
 ):
-    """ INSTANTIATE all trainable policy components
-    
-    - Feature extractor (uses frozen HRVQ codebooks)
-    - Actor Network
-    - Critic Network
-    - Reward Predictor
-    - Continue Predictor
-    """
-    
+    """ INSTANTIATE ALL TRAINABLE POLICY COMPONENTS """
+
     policy_config = config['policy']
-    mode = policy_config.get('feature_mode', 'hidden_state')    
-    
-    # 1. HIDDEN STATE FEATURE EXTRACTOR
-    if mode == 'hidden_state':
+    mode = policy_config.get('feature_mode', 'hidden_state')
+
+    # 1. FEATURE EXTRACTOR - THREE SUPPORTED MODES
+    if mode == 'visual':
+        # LOAD PRE-TRAINED FROZEN FRAME DECODER
+        from decoder import FrameDecoder
+        decoder_path = policy_config.get('decoder_checkpoint', 'checkpoints/decoder_best.pt')
+        print(f"\n  Loading pre-trained decoder from {decoder_path}...")
+        decoder = FrameDecoder(emb_dim=384, base_ch=128).to(device)
+        ck = torch.load(decoder_path, map_location=device, weights_only=False)
+        decoder.load_state_dict(ck['model_state_dict'])
+        decoder.eval()
+        for p in decoder.parameters():
+            p.requires_grad = False
+        print(f"  Decoder loaded and FROZEN  (val_loss={ck.get('val_loss', '?'):.5f})")
+
+        # TRAINABLE CNN VISUAL ENCODER
+        visual_feat_dim = policy_config.get('visual_feature_dim', 512)
+        visual_encoder  = VisualEncoder(input_channels=3, feat_dim=visual_feat_dim).to(device)
+
+        # COMBINED EXTRACTOR: TOKENS TO DECODE TO CNN
+        feature_extractor = VisualFeatureExtractor(
+            hrvq_tokenizer = hrvq,
+            decoder        = decoder,
+            visual_encoder = visual_encoder,
+        ).to(device)
+
+    elif mode == 'hidden_state':
         feature_extractor = HiddenStateFeatureExtractor(
-            d_model = 384,
+            d_model        = 384,
             use_projection = True,
         ).to(device)
-    
-    else: 
-        # ARCHIVE FEATURE EXTRACTOR (Frozen HRVQ codebooks)
+
+    else:
+        # LEGACY CODEBOOK-LOOKUP MODES
         feature_extractor = HierarchicalFeatureExtractor(
             hrvq_tokenizer = hrvq,
-            mode = mode,
-            d_model = 384,
+            mode           = mode,
+            d_model        = 384,
         ).to(device)
-    
-   
-    # EXTRACT
+
+
+    # EXTRACT FEATURE DIM
     feat_dim = feature_extractor.feat_dim
     hidden_dim = policy_config.get('hidden_dim', 512)
-    
+
     # 2. ACTOR NETWORK
     policy = ActorNetwork(
         feat_dim = feat_dim,
@@ -219,29 +224,29 @@ def build_trainable_networks(
         hidden_dim = hidden_dim,
         unimix = policy_config.get('unimix', 0.01),
     ).to(device)
-    
+
     # 3. CRITIC NETWORK
     critic = CriticNetwork(
         feat_dim = feat_dim,
         hidden_dim = hidden_dim,
     ).to(device)
-    
+
     # 4. REWARD NETWORK
     reward_net = RewardNetwork(
         feat_dim = feat_dim,
         hidden_dim = hidden_dim,
     ).to(device)
-    
+
     # 5. CONTINUE NETWORK
     continue_net = ContinueNetwork(
         feat_dim = feat_dim,
         hidden_dim = hidden_dim // 2,
     ).to(device)
-    
+
     # PARAM COUNTS
     counts = count_policy_params(
         critic = critic,
-        actor = policy,    
+        actor = policy,
         reward_net = reward_net,
         continue_net = continue_net,
         feature_extractor = feature_extractor,
@@ -249,20 +254,20 @@ def build_trainable_networks(
     print(f"\n  Trainable networks ({mode} mode, feat_dim={feat_dim}):")
     for name, count in counts.items():
         print(f"    {name}: {count:,}")
-    
+
     return feature_extractor, policy, critic, reward_net, continue_net
 
 
 def main():
-    
-    # SETUP 
+
+    # SETUP
     args = parse_args()
     config = load_config(args.config)
-    
+
     # SEED
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
-    
+
     # DEVICE AND INIT OUTPUT
     device = torch.device(args.device if torch.cuda.is_available() else "cpu")
     print()
@@ -270,7 +275,7 @@ def main():
     print()
     print(f"Device: {device}")
     print()
-    
+
     if device.type == 'cuda':
         print(f"  GPU: {torch.cuda.get_device_name(0)}")
 
@@ -282,25 +287,24 @@ def main():
     print()
     print(f"GAME: {game}")
     print(f"NUMBER OF ACTIONS: {num_actions}")
-    print(f"OFFLINE TRAINING" if offline_mode else "ONLINE TRAINING") 
+    print(f"OFFLINE TRAINING" if offline_mode else "ONLINE TRAINING")
     print()
-    
-    # JOIN TRAINING MODE
+
+    # JOINT TRAINING MODE
     jt_config = config.get('joint_training', {})
     joint_training = jt_config.get('enabled', False) and not offline_mode
 
     # LOAD FROZEN MODELS
-    
     print(f"Loading FROZEN models... ")
     print()
     world_model, hrvq_tokenizer, cnn_encoder = load_frozen_models(
-        config = config, 
-        device = device,    
+        config = config,
+        device = device,
         joint_training = joint_training,
     )
     print(f"FROZEN models loaded.")
     print()
-    
+
     # BUILD NETWORKS (TRAINABLE)
     print(f"Building TRAINABLE networks... ")
     feature_extractor, policy, critic, reward_net, continue_net = build_trainable_networks(
@@ -312,8 +316,8 @@ def main():
     print()
     print(f"TRAINABLE networks built.")
     print()
-    
-    # ENVIRONMENT (required for both)
+
+    # ENVIRONMENT
     env = None
     if not offline_mode:
         print(f"Building ENVIRONMENT (ALE)... ")
@@ -322,16 +326,16 @@ def main():
             seed = args.seed,
         )
         print()
-        
+
         # CHECK ACTION SPACE
         if env_actions and env_actions != num_actions:
             print(f"  WARNING: config num_actions={num_actions} but env has {env_actions}")
             num_actions = env_actions
             print()
-        
+
         print(f"ENVIRONMENT ready.")
         print()
-        
+
     # REPLAY BUFFER
     print(f"Building REPLAY BUFFER... ")
     if offline_mode:
@@ -340,7 +344,7 @@ def main():
             game = game,
             device = device,
         )
-    
+
     else:
         buffer = TokenReplayBuffer(
             capacity = 100_000,
@@ -350,10 +354,10 @@ def main():
     print()
     print(f"REPLAY BUFFER ready.")
     print()
-    
-    """ IMAGINATION ROLLOUT MODULE"""
+
+    # IMAGINATION ROLLOUT MODULE
     print(f"Building IMAGINATION module... ")
-    
+
     imagination = ImagineRollout(
         world_model = world_model,
         feature_extractor = feature_extractor,
@@ -368,7 +372,7 @@ def main():
     print()
     print(f"IMAGINATION module ready.")
     print()
-    
+
     # TRAINER (ACTOR-CRITIC)
     print(f"Initializing TRAINER... ")
     trainer = ActorCriticTrainer(
@@ -389,7 +393,7 @@ def main():
     print()
     print(f"TRAINER initialized.")
     print()
-    
+
     # TRAIN
     print(f"STARTING TRAINING... ")
     trainer.train(
@@ -407,5 +411,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
-    
