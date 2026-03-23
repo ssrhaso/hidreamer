@@ -1,9 +1,4 @@
-""" POLICY NETWORKS FOR ACTOR CRITIC
-
-ALL TRAINABLE COMPONENTS FOR IMAGINATION BASED RL
-
-World Model is FROZEN during PPO training - only these networks are updated.
-"""
+""" POLICY NETWORKS FOR ACTOR-CRITIC RL """
 
 import torch
 import torch.nn as nn
@@ -11,58 +6,47 @@ import torch.nn.functional as F
 import torch.distributions as D
 from typing import Tuple, Optional
 import math
-import copy 
+import copy
 
-""" HELPER FUNCTIONS """
-# SYMLOG / SYMEXP TRANSFORMS FOR REWARDS AND VALUES TO HANDLE ATARI'S WIDE REWARD SCALE 
+
+# SYMLOG / SYMEXP TRANSFORMS FOR REWARDS AND VALUES
 def symlog(
     x : torch.Tensor
     ) -> torch.Tensor:
-    """Compress large magnitudes: sign(x) * ln(|x| + 1). 
-    
-    Keeps small values ~unchanged, squashes 999 -> 6.9.
-    Applied to reward targets and critic values so Breakout's large rewards don't dominate Pong's small ones."""
-    
+    """ COMPRESS LARGE MAGNITUDES: SIGN(X) * LN(|X| + 1) """
     return torch.sign(x) * torch.log1p(torch.abs(x))
 
 def symexp(
     x : torch.Tensor
     ) -> torch.Tensor:
-    """Inverse of symlog: sign(x) * (exp(|x|) - 1). 
-    
-    Decompress predictions back to real scale."""
+    """ INVERSE OF SYMLOG: SIGN(X) * (EXP(|X|) - 1) """
     return torch.sign(x) * (torch.expm1(torch.abs(x)))
 
-# GET HORIZON SCHEDULE FOR IMAGINATION
+# HORIZON SCHEDULE FOR IMAGINATION
 def get_horizon(
     current_step : int,
     total_steps : int,
     max_horizon : int = 30,
     min_horizon : int = 5,
     flat_horizon : int = 15,
-    mode : str = "decay", # "flat" , "decay" , "bell"
+    mode : str = "decay",
 ) -> int:
-    """ Unified Horizon Scheduler for Imagination Rollouts.
-    
-    mode = "flat" 15: constant horizon (baseline). (15 in DreamerV3, 15 in TWISTER)
-    mode = "decay" 30-> 5: cosine decay from max_horizon to min_horizon. (explore more early, exploit more late)
-    mode = "bell" 5->30->5: cosine bell curve peaking at mid-training for a ramp-up then compression curriculum.
-    """
-    
-    progress = min(1.0, current_step / max(total_steps, 1))  # Normalize progress to [0, 1]
-    
-    # 15 STEP CONSTANT HORIZON (DREAMERV3 DEFAULT) [15]
+    """ UNIFIED HORIZON SCHEDULER FOR IMAGINATION ROLLOUTS """
+
+    progress = min(1.0, current_step / max(total_steps, 1))
+
+    # CONSTANT HORIZON
     if mode == "flat":
         return flat_horizon
-    
-    # COSINE DECAY FROM MAX_HORIZON TO MIN_HORIZON [30 -> 5]
+
+    # COSINE DECAY FROM MAX TO MIN
     elif mode == "decay":
-        cosine = 0.5 * (1.0 + math.cos(math.pi * progress))  # Cosine from 1 initial to 0 at end
+        cosine = 0.5 * (1.0 + math.cos(math.pi * progress))
         return int(round(min_horizon + (max_horizon - min_horizon) * cosine))
-    
-    # COSINE BELL CURVE FROM MIN TO MAX BACK TO MIN [5 -> 30 -> 5]
+
+    # COSINE BELL CURVE FROM MIN TO MAX BACK TO MIN
     elif mode == "bell":
-        cosine = 0.5 * (1.0 - math.cos(2.0 * math.pi * progress))  # Cosine bell from 0 to 1 to 0
+        cosine = 0.5 * (1.0 - math.cos(2.0 * math.pi * progress))
         return int(round(min_horizon + (max_horizon - min_horizon) * cosine))
 
     else:
@@ -70,413 +54,504 @@ def get_horizon(
 
 # POLICY NETWORKS
 class HierarchicalFeatureExtractor(nn.Module):
-    """Converts HRVQ token indices -> dense feature vector by looking up frozen codebook embeddings.
-    
-    OPTION 1 - Concat mode: [codebook_0[L0] | codebook_1[L1] | codebook_2[L2]] → 1152D.
-    OPTION 2 - Attention mode: 3-token self-attention over the three layer embeddings -> pooled 384D."""
-    
+    """ CONVERTS HRVQ TOKEN INDICES TO DENSE FEATURE VECTOR VIA CODEBOOK LOOKUP """
+
     def __init__(
         self,
-        hrvq_tokenizer, # FROZEN - used only for lookups
-        mode : str = 'concat', # 'concat' or 'attention'
-        d_model : int = 384,   # only used for attention mode
+        hrvq_tokenizer,
+        mode : str = 'concat',
+        d_model : int = 384,
     ):
         super().__init__()
         self.mode = mode
         self.d_model = d_model
-        self.hrvq = hrvq_tokenizer # FROZEN 
-        
+        self.hrvq = hrvq_tokenizer  # FROZEN
+
         if mode == "concat":
-            self.feat_dim = d_model * 3  # 1152 Dimension (3 layers * 384 each)
-        
+            self.feat_dim = d_model * 3  # 1152 DIMENSIONS
+
         elif mode == "attention":
-            self.feat_dim = d_model      # 384 Dimension (pooled output)
-            
-            # 3 TOKEN SELF ATTENTION LAYER AGGREGRATION
+            self.feat_dim = d_model      # 384 DIMENSIONS
+
+            # 3-TOKEN SELF-ATTENTION AGGREGATION
             self.cross_attn = nn.MultiheadAttention(
-                embed_dim = d_model, # 384 DIM
-                num_heads = 4,       # 4 HEADS
-                dropout = 0.0,       # 0.0 DROPOUT SINCE FEATURE EXTRACTION
-                batch_first = True  
+                embed_dim = d_model,
+                num_heads = 4,
+                dropout = 0.0,
+                batch_first = True
             )
-            self.attn_norm = nn.LayerNorm(d_model)  # LAYER NORM FOR ATTENTION OUTPUT
-            self.feat_dim = d_model                 # FINAL FEATURE DIMENSION AFTER ATTENTION (384)
-            
+            self.attn_norm = nn.LayerNorm(d_model)
+            self.feat_dim = d_model
+
         else:
             raise ValueError(f"Unknown Mode : {mode}. Use 'concat' or 'attention'.")
-    
+
     @torch.no_grad()
     def _lookup_codebooks(
         self,
-        tokens : torch.Tensor,  
+        tokens : torch.Tensor,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Look up codebook embeddings for each HRVQ layer """
-        
+        """ LOOK UP CODEBOOK EMBEDDINGS FOR EACH HRVQ LAYER """
+
         emb_l0 = self.hrvq.vq_layers[0].codebook(tokens[:, 0]) # (B, 384)
         emb_l1 = self.hrvq.vq_layers[1].codebook(tokens[:, 1]) # (B, 384)
         emb_l2 = self.hrvq.vq_layers[2].codebook(tokens[:, 2]) # (B, 384)
-        
+
         return emb_l0, emb_l1, emb_l2
-    
+
     def forward(
         self,
-        tokens : torch.Tensor, 
+        tokens : torch.Tensor,
     )-> torch.Tensor:
-        """ Forward Pass """
-        
-        # LOOKUP CODEBOOK EMBEDDINGS FOR EACH LAYER 
+        """ FORWARD PASS """
+
+        # LOOKUP CODEBOOK EMBEDDINGS FOR EACH LAYER
         emb_l0, emb_l1, emb_l2 = self._lookup_codebooks(tokens) # (B, 384) each
-        
-        # OPTION A - CONCATENATE LAYER EMBEDDINGS 
+
+        # OPTION A - CONCATENATE LAYER EMBEDDINGS
         if self.mode == "concat":
             feat = torch.cat([emb_l0, emb_l1, emb_l2], dim = -1) # (B, 1152)
-        
-        # OPTION B - ATTENTION OVER LAYER EMBEDDINGS 
-        
+
+        # OPTION B - ATTENTION OVER LAYER EMBEDDINGS
         elif self.mode == "attention":
             seq = torch.stack(tensors = [emb_l0, emb_l1, emb_l2], dim = 1)  # (B, 3, 384)
             attended, _ = self.cross_attn(seq, seq, seq)        # (B, 3, 384)
-            attended = self.attn_norm(attended + seq)           # RESIDUAL + NORM 
-            feat = attended.mean(dim = 1)                         # MEAN POOL (B, 384) 
-        
+            attended = self.attn_norm(attended + seq)           # RESIDUAL + NORM
+            feat = attended.mean(dim = 1)                         # MEAN POOL (B, 384)
+
         return feat
-    
+
 
 class HiddenStateFeatureExtractor(nn.Module):
-    """ EXTRACTS POLICY FEATURES from FROZEN TRANSFORMER hidden states 
-    
-    Replaces CODEBOOK LOOKUP with direct use of the world model hidden stats 
-    """      
-    
+    """ EXTRACTS POLICY FEATURES FROM FROZEN TRANSFORMER HIDDEN STATES """
+
     def __init__(
         self,
-        d_model : int = 384,          # DIMENSION OF TRANSFORMER HIDDEN STATES
-        use_projection : bool = True, # WHETHER TO PROJECT HIDDEN STATES TO A LOWER DIMENSION
+        d_model : int = 384,
+        use_projection : bool = True,
     ):
         super().__init__()
         self.d_model = d_model
         self.use_projection = use_projection
-        self.feat_dim = d_model * 3 # 1152D (same as codebook concat)
-        
-        # IF PROJECTION (Lets policy network adapt to frozen WM representation)
+        self.feat_dim = d_model * 3  # 1152D
+
+        # PROJECTION LAYER
         self.projection = nn.Sequential(
             nn.LayerNorm(normalized_shape = self.feat_dim),
             nn.Linear(in_features = self.feat_dim, out_features = self.feat_dim),
             nn.SiLU(),
         )
-        
+
     def forward(
         self,
-        hidden_states : torch.Tensor, # (B, 3, d_model) HIDDEN STATES FROM TRANSFORMER
+        hidden_states : torch.Tensor,
     ) -> torch.Tensor:
-        """ Forward Pass """
-        
+        """ FORWARD PASS """
+
         if hidden_states.dim() == 3:
             # (B, 3, 384) -> (B, 1152) CONCATENATE HIDDEN STATES
             feat = hidden_states.reshape(shape = (hidden_states.size(0), -1))
-            
-        else:
-            feat = hidden_states # ASSUME ALREADY CONCATENATED (B, 1152)
-        
-        if self.use_projection:
-            feat = self.projection(feat) # PROJECTED FEATURES (B, 1152)
-        
-        return feat
-            
 
-class ActorNetwork(nn.Module):
-    """ The Actor. 
-    
-    Maps 1152D feature -> categorical distribution over Atari actions.
-    LayerNorm -> 2-layer MLP (ELU) -> softmax with 1% uniform mix to prevent collapse.
-    Zero-init final layer -> uniform initial policy -> unbiased exploration at start."""
+        else:
+            feat = hidden_states  # ASSUME ALREADY CONCATENATED (B, 1152)
+
+        if self.use_projection:
+            feat = self.projection(feat)  # PROJECTED FEATURES (B, 1152)
+
+        return feat
+
+    # DISPATCH FLAG USED BY IMAGINEROLLOUT AND _TRAIN_AUX
+    is_visual_mode: bool = False
+
+
+# VISUAL POLICY COMPONENTS
+class VisualEncoder(nn.Module):
+    """ CNN ENCODER FOR MULTI-SCALE DECODED ATARI FRAMES """
+
+    def __init__(self, input_channels: int = 3, feat_dim: int = 512):
+        super().__init__()
+        self.feat_dim = feat_dim
+
+        self.cnn = nn.Sequential(
+            nn.Conv2d(input_channels, 32, kernel_size=8, stride=4, padding=0),  # 20x20
+            nn.ReLU(inplace=True),
+            nn.Conv2d(32, 64, kernel_size=4, stride=2, padding=0),              # 9x9
+            nn.ReLU(inplace=True),
+            nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=0),              # 7x7
+            nn.ReLU(inplace=True),
+            nn.Flatten(),                                                         # 3136
+        )
+
+        self.head = nn.Sequential(
+            nn.Linear(64 * 7 * 7, feat_dim),
+            nn.LayerNorm(feat_dim),
+            nn.SiLU(),
+        )
+
+        self._init_weights()
+
+    def _init_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
+            elif isinstance(m, nn.Linear):
+                nn.init.kaiming_normal_(m.weight, nonlinearity='relu')
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """ ENCODE (B, 3, 84, 84) TO (B, FEAT_DIM) """
+        return self.head(self.cnn(x))
+
+
+class VisualFeatureExtractor(nn.Module):
+    """ POLICY FEATURE EXTRACTION VIA HIERARCHICAL PIXEL DECODING """
+
+    is_visual_mode: bool = True   # DISPATCH FLAG FOR IMAGINEROLLOUT AND _TRAIN_AUX
+
+    def __init__(self, hrvq_tokenizer, decoder, visual_encoder: VisualEncoder):
+        super().__init__()
+        # REGISTER DECODER AS SUBMODULE SO .TO(DEVICE) MOVES IT
+        self.decoder        = decoder
+        self.visual_encoder = visual_encoder
+        # DO NOT REGISTER HRVQ AS SUBMODULE - MANAGED BY POLICY_TRAIN.PY
+        self._hrvq = hrvq_tokenizer
+        self.feat_dim = visual_encoder.feat_dim
+
+    def get_multi_scale_frames(self, tokens: torch.Tensor) -> torch.Tensor:
+        """ TOKENS (B, 3) TO (B, 3, 84, 84) MULTI-SCALE DECODED FRAMES """
+        # CODEBOOK LOOKUP - ALWAYS NO-GRAD
+        with torch.no_grad():
+            emb_l0 = self._hrvq.vq_layers[0].codebook(tokens[:, 0])  # (B, 384)
+            emb_l1 = self._hrvq.vq_layers[1].codebook(tokens[:, 1])  # (B, 384)
+            emb_l2 = self._hrvq.vq_layers[2].codebook(tokens[:, 2])  # (B, 384)
+
+        coarse = self.decoder(emb_l0)                       # (B, 1, 84, 84)
+        mid    = self.decoder(emb_l0 + emb_l1)              # (B, 1, 84, 84)
+        full   = self.decoder(emb_l0 + emb_l1 + emb_l2)    # (B, 1, 84, 84)
+
+        return torch.cat([coarse, mid, full], dim=1)        # (B, 3, 84, 84)
+
+    def forward(self, tokens: torch.Tensor) -> torch.Tensor:
+        """ TOKENS (B, 3) TO POLICY FEATURES (B, FEAT_DIM) """
+        frames = self.get_multi_scale_frames(tokens)        # (B, 3, 84, 84)
+        return self.visual_encoder(frames)                  # (B, feat_dim)
+
+
+class CPCHead(nn.Module):
+    """ ACTOR-CRITIC CONTRASTIVE PREDICTIVE CODING HEAD """
 
     def __init__(
         self,
-        feat_dim : int,                 # CONCAT = 1152, ATTENTION = 384
-        num_actions : int,              # GAME SPECIFIC (PONG = 6, BREAKOUT = 4, MsPACMAN = 9)
-        hidden_dim : int = 512,         # SIZE OF HIDDEN LAYER IN MLP
-        unimix : float = 0.01,          # DreamerV3 = 1%
+        feat_dim    : int,
+        proj_dim    : int   = 256,
+        k_steps     : int   = 3,
+        temperature : float = 0.1,
     ):
-        # SETUP 
+        super().__init__()
+        self.k_steps     = k_steps
+        self.temperature = temperature
+
+        # PREDICTOR: F_T TO PREDICTED FUTURE REPRESENTATION
+        self.predictor = nn.Sequential(
+            nn.Linear(feat_dim, feat_dim),
+            nn.SiLU(),
+            nn.Linear(feat_dim, proj_dim),
+        )
+        # PROJECTOR: F_{T+K} TO TARGET REPRESENTATION
+        self.projector = nn.Linear(feat_dim, proj_dim)
+
+    def forward(
+        self,
+        feats : torch.Tensor,
+    ) -> torch.Tensor:
+        """ COMPUTE INFONCE LOSS OVER TRAJECTORY FEATURES """
+        B, H, D = feats.shape
+        k = self.k_steps
+
+        if H <= k:
+            return feats.new_zeros(()).requires_grad_(True)
+
+        anchors = feats[:, :H-k, :]   # (B, H-k, D)
+        targets = feats[:, k:,   :]   # (B, H-k, D)
+
+        preds = self.predictor(anchors)
+        tgts  = self.projector(targets.detach())
+        # DETACH TARGETS - ASYMMETRIC LIKE BYOL/SIMSIAM
+
+        # L2-NORMALIZE FOR COSINE SIMILARITY SPACE
+        preds = F.normalize(preds, dim=-1)
+        tgts  = F.normalize(tgts,  dim=-1)
+
+        # FLATTEN BATCH x TIME DIMENSION
+        T          = B * (H - k)
+        preds_flat = preds.reshape(T, -1)
+        tgts_flat  = tgts.reshape(T, -1)
+
+        # INFONCE: POSITIVE PAIRS ON DIAGONAL
+        logits = torch.matmul(preds_flat, tgts_flat.t()) / self.temperature  # (T, T)
+        labels = torch.arange(T, device=feats.device)
+
+        return F.cross_entropy(logits, labels)
+
+
+class ActorNetwork(nn.Module):
+    """ THE ACTOR - MAPS FEATURE TO CATEGORICAL DISTRIBUTION OVER ACTIONS """
+
+    def __init__(
+        self,
+        feat_dim : int,
+        num_actions : int,
+        hidden_dim : int = 512,
+        unimix : float = 0.01,
+    ):
         super().__init__()
         self.num_actions = num_actions
         self.unimix = unimix
-        
-        # NETWORK ARCHITECTURE, DreamerV3
+
+        # NETWORK ARCHITECTURE
         self.net = nn.Sequential(
-            nn.LayerNorm(normalized_shape = feat_dim), 
-            nn.Linear(in_features = feat_dim, out_features = hidden_dim), 
-            nn.SiLU(), 
-            nn.Linear(in_features = hidden_dim, out_features = hidden_dim), 
-            nn.SiLU() ,
-            nn.Linear(in_features = hidden_dim, out_features = num_actions) ,
+            nn.LayerNorm(normalized_shape = feat_dim),
+            nn.Linear(in_features = feat_dim, out_features = hidden_dim),
+            nn.SiLU(),
+            nn.Linear(in_features = hidden_dim, out_features = hidden_dim),
+            nn.SiLU(),
+            nn.Linear(in_features = hidden_dim, out_features = num_actions),
         )
-        
-        # ZERO INITIALISATION - UNBIASED STARTING POLICY CONTRARY TO KAIMING INIT (PYTORCH DEFAULT)
+
+        # ZERO INIT FOR UNBIASED STARTING POLICY
         nn.init.zeros_(tensor = self.net[-1].weight)
         nn.init.zeros_(tensor = self.net[-1].bias)
-        
+
     def forward(
         self,
         feat : torch.Tensor,
-    ) -> D.Categorical: 
-        """ Forward Pass, returns Categorical Distribution over actions in given state """
-        
+    ) -> D.Categorical:
+        """ RETURN CATEGORICAL DISTRIBUTION OVER ACTIONS """
+
         # PASS MLP TO GET ACTION LOGITS
         logits = self.net(feat)
-        
-        # UNIMIX BLENDING TO PREVENT COLLAPSE EARLY IN TRAINING
-        
+
+        # UNIMIX BLENDING TO PREVENT COLLAPSE
         if self.unimix > 0:
-            
-            probs = F.softmax(input = logits, dim = -1)                        # SOFTMAX - PROBABILITY DISTRIBUTION
-            uniform_probs = torch.ones_like(input = probs) / self.num_actions  # UNIFORM DISTRIBUTION OVER ACTIONS
-            probs = (1 - self.unimix) * probs + self.unimix * uniform_probs    # BLEND WITH UNIFORM
-            dist = D.Categorical(probs = probs)                                # CATEGORICAL DISTRIBUTION
-        
+            probs = F.softmax(input = logits, dim = -1)
+            uniform_probs = torch.ones_like(input = probs) / self.num_actions
+            probs = (1 - self.unimix) * probs + self.unimix * uniform_probs
+            dist = D.Categorical(probs = probs)
+
         else:
-            dist = D.Categorical(logits = logits)                              # NO UNIMIX, STANDARD CATEGORICAL
-        
+            dist = D.Categorical(logits = logits)
+
         return dist
-    
+
 
 class CriticNetwork(nn.Module):
-    """ The Critic. 
-    
-    Maps 1152D feature -> scalar 'how good is this state?'
-    Same architecture as actor but outputs 1 value instead of num_actions logits.
-    Separate from actor to avoid gradient interference (MSE vs REINFORCE scales differ)."""
-    
+    """ THE CRITIC - MAPS FEATURE TO SCALAR STATE VALUE """
+
     def __init__(
         self,
-        feat_dim : int,         # CONCAT = 1152, ATTENTION = 384
-        hidden_dim : int = 512, # SIZE OF HIDDEN LAYER IN MLP
+        feat_dim : int,
+        hidden_dim : int = 512,
     ):
         super().__init__()
-        
+
         self.net = nn.Sequential(
-            nn.LayerNorm(normalized_shape = feat_dim), 
-            nn.Linear(in_features = feat_dim, out_features = hidden_dim), 
-            nn.SiLU(), 
-            nn.Linear(in_features = hidden_dim, out_features = hidden_dim), 
-            nn.SiLU() ,
-            nn.Linear(in_features = hidden_dim, out_features = 1) ,
+            nn.LayerNorm(normalized_shape = feat_dim),
+            nn.Linear(in_features = feat_dim, out_features = hidden_dim),
+            nn.SiLU(),
+            nn.Linear(in_features = hidden_dim, out_features = hidden_dim),
+            nn.SiLU(),
+            nn.Linear(in_features = hidden_dim, out_features = 1),
         )
-        
-        # ZERO INITIALISATION FOR STABLE STARTING VALUE PREDICTIONS
+
+        # ZERO INIT FOR STABLE STARTING VALUE PREDICTIONS
         nn.init.zeros_(tensor = self.net[-1].weight)
         nn.init.zeros_(tensor = self.net[-1].bias)
-        
+
     def forward(
         self,
         feat : torch.Tensor,
     ) -> torch.Tensor:
-        """ Forward Pass, returns scalar value prediction for given state """
-        
-        value = self.net(feat).squeeze(-1) # (B,) SCALAR VALUE PREDICTION
+        """ RETURN SCALAR VALUE PREDICTION """
+
+        value = self.net(feat).squeeze(-1)  # (B,) SCALAR VALUE PREDICTION
         return value
 
 class RewardNetwork(nn.Module):
-    """Predicts immediate reward from state features in symlog space.
-    
-    Trained supervised on real transitions (where true rewards exist).
-    Used during imagination to provide reward signal when no real env is available."""
-    
+    """ PREDICTS IMMEDIATE REWARD FROM STATE FEATURES IN SYMLOG SPACE """
+
     def __init__(
         self,
-        feat_dim : int,         # CONCAT = 1152, ATTENTION = 384
-        hidden_dim : int = 512, # SIZE OF HIDDEN LAYER IN MLP
+        feat_dim : int,
+        hidden_dim : int = 512,
     ):
         super().__init__()
-        
-        # SAME ARCHITECTURE AS CRITIC BUT OUTPUTS 1 VALUE (REWARD PREDICTION) INSTEAD OF VALUE PREDICTION
+
         self.net = nn.Sequential(
-            nn.LayerNorm(normalized_shape = feat_dim), 
-            nn.Linear(in_features = feat_dim, out_features = hidden_dim), 
-            nn.SiLU(), 
-            nn.Linear(in_features = hidden_dim, out_features = hidden_dim), 
-            nn.SiLU() ,
-            nn.Linear(in_features = hidden_dim, out_features = 1) ,
+            nn.LayerNorm(normalized_shape = feat_dim),
+            nn.Linear(in_features = feat_dim, out_features = hidden_dim),
+            nn.SiLU(),
+            nn.Linear(in_features = hidden_dim, out_features = hidden_dim),
+            nn.SiLU(),
+            nn.Linear(in_features = hidden_dim, out_features = 1),
         )
-        
-        # ZERO INITIALISATION FOR STABLE STARTING REWARD PREDICTIONS
+
+        # ZERO INIT FOR STABLE STARTING REWARD PREDICTIONS
         nn.init.zeros_(tensor = self.net[-1].weight)
         nn.init.zeros_(tensor = self.net[-1].bias)
-        
+
 
     def forward(
         self,
         feat : torch.Tensor,
     ) -> torch.Tensor:
-        """ Forward Pass, returns scalar reward prediction for given state features """
+        """ RETURN SCALAR REWARD PREDICTION """
 
-        return self.net(feat).squeeze(-1) # (B,) SCALAR REWARD PREDICTION
-    
+        return self.net(feat).squeeze(-1)  # (B,) SCALAR REWARD PREDICTION
+
 
 class ContinueNetwork(nn.Module):
-    """Predicts p(episode continues) as a logit -> sigmoid for probability.
-    
-    Bias-initialized positive (sigmoid(2)≈0.88) because 99% of Atari steps aren't terminal.
-    During imagination: effective_discount = gamma * p(continue), soft-truncating near game-over states."""
+    """ PREDICTS P(EPISODE CONTINUES) AS LOGIT """
 
     def __init__(
         self,
-        feat_dim : int,         # CONCAT = 1152, ATTENTION = 384
-        hidden_dim : int = 512, # SIZE OF HIDDEN LAYER IN MLP
+        feat_dim : int,
+        hidden_dim : int = 512,
     ):
         super().__init__()
         self.net = nn.Sequential(
-            nn.LayerNorm(normalized_shape = feat_dim), 
-            nn.Linear(in_features = feat_dim, out_features = hidden_dim), 
-            nn.SiLU(), 
-            nn.Linear(in_features = hidden_dim, out_features = hidden_dim), 
-            nn.SiLU() ,
-            nn.Linear(in_features = hidden_dim, out_features = 1) ,
+            nn.LayerNorm(normalized_shape = feat_dim),
+            nn.Linear(in_features = feat_dim, out_features = hidden_dim),
+            nn.SiLU(),
+            nn.Linear(in_features = hidden_dim, out_features = hidden_dim),
+            nn.SiLU(),
+            nn.Linear(in_features = hidden_dim, out_features = 1),
         )
-        
-        # ZERO INITIALISATION WITH POSITIVE BIAS FOR HIGH INITIAL CONTINUE PROBABILITY (ATARI IS 99% NON-TERMINAL STEPS)
+
+        # ZERO INIT WITH POSITIVE BIAS FOR HIGH INITIAL CONTINUE PROBABILITY
         nn.init.zeros_(tensor = self.net[-1].weight)
-        nn.init.constant_(tensor = self.net[-1].bias, val = 2.0) # SIGMOID(2) ≈ 0.88, CLOSE TO REAL 0.99 TO PREVENT EARLY IMAGINATION COLLAPSE
-        
+        nn.init.constant_(tensor = self.net[-1].bias, val = 2.0)  # SIGMOID(2) ~ 0.88
+
 
     def forward(
         self,
         feat : torch.Tensor,
     ) -> torch.Tensor:
-        """ Forward Pass, returns raw continue logit for given state features, 
-        indicating how likely the episode is to continue from this state (game over). """
-        
-        return self.net(feat).squeeze(-1) # (B,) SCALAR CONTINUE LOGIT
-    
-    
+        """ RETURN RAW CONTINUE LOGIT """
+
+        return self.net(feat).squeeze(-1)  # (B,) SCALAR CONTINUE LOGIT
+
+
 class CriticMovingAverage(nn.Module):
-    """Expontential Moving Average copy of the critic updated at τ=0.02 per step for stable λ-return targets.
-    
-    Solves the moving-target problem: critic can't train on its own rapidly-changing predictions.
-    Same technique as DDPG, SAC, DreamerV3."""
+    """ EMA COPY OF CRITIC FOR STABLE LAMBDA-RETURN TARGETS """
     def __init__(
         self,
-        critic : CriticNetwork,    # CRITIC NETWORK TO COPY
-        tau : float = 0.02,        # EMA UPDATE RATE
+        critic : CriticNetwork,
+        tau : float = 0.02,
     ):
 
         super().__init__()
         self.target_net = copy.deepcopy(critic)    # INITIAL COPY OF CRITIC
         self.target_net.requires_grad_(False)      # FROZEN TARGET NETWORK
-        self.target_net.eval()                     # EVAL MODE FOR STABILITY
+        self.target_net.eval()
         self.tau = tau
-        
+
     @torch.no_grad()
     def update(
         self,
-        critic : CriticNetwork, # CRITIC NETWORK TO TRACK
+        critic : CriticNetwork,
     ):
-        """ EMA Update 2% towards Online Critic """
-        
-        # ZIP TOGETHER TARGET NET AND ONLINE CRITIC PARAMETERS AND UPDATE IN PLACE
+        """ EMA UPDATE 2% TOWARDS ONLINE CRITIC """
+
         for parameters_emacritic, parameters_onlinecritic in zip(self.target_net.parameters(), critic.parameters()):
-            
-            # EMA UPDATE : target = (1 - tau) * target + tau * online
+            # EMA UPDATE: target = (1 - tau) * target + tau * online
             parameters_emacritic.data.lerp_(end = parameters_onlinecritic.data, weight = self.tau)
-    
+
     def forward(
         self,
         feat : torch.Tensor,
     ) -> torch.Tensor:
-        """ Forward Pass, returns stable value estimates for λ-return targets """
-        
-        return self.target_net(feat) # (B,) SCALAR VALUE PREDICTION FROM EMA CRITIC
-    
-    
-    
+        """ RETURN STABLE VALUE ESTIMATES FROM EMA CRITIC """
+
+        return self.target_net(feat)  # (B,) SCALAR VALUE PREDICTION
+
+
 def compute_lambda_returns(
-    rewards : torch.Tensor,          # (B, H) PREDICTED  REWARD
-    values : torch.Tensor,           # (B, H) PREDICTED VALUE FROM EMA CRITIC
-    continues : torch.Tensor,        # (B, H) PREDICTED CONTINUE LOGITS FROM CONTINUE NETWORK
-    last_value : torch.Tensor,       # (B,) VALUE PREDICTION FOR LAST STATE FROM EMA CRITIC 
-    gamma : float = 0.997,           # DISCOUNT FACTOR
-    lam : float = 0.95,              # LAMBDA FOR BLENDING TD AND MONTE CARLO TARGETS
+    rewards : torch.Tensor,
+    values : torch.Tensor,
+    continues : torch.Tensor,
+    last_value : torch.Tensor,
+    gamma : float = 0.997,
+    lam : float = 0.95,
 )-> torch.Tensor:
-    """Backwards-recursive λ-return: blends 1-step TD (low variance) with Monte Carlo (low bias).
-    G_t = r_t + Y * c_t * [(1-λ)*V(s_{t+1}) + λ*G_{t+1}]. 
-    
-    λ = How much you trust the critic vs the reward network and future returns.
-    
-    λ=0.95 uses 95% of long-horizon info. 
-    Returns (B, H) targets that the critic is trained to predict."""
-    
-    # (B, H) INITIALIZE TARGETS TENSOR
+    """ BACKWARDS-RECURSIVE LAMBDA-RETURN BLENDING TD AND MONTE CARLO TARGETS """
+
     B , H = rewards.shape
-    targets = torch.zeros_like(rewards) 
-    
-    # BOOTSTRAP LAST VALUE FOR G_{H-1}
-    next_val = last_value 
-    
+    targets = torch.zeros_like(rewards)
+
+    # BOOTSTRAP LAST VALUE
+    next_val = last_value
+
     for t in reversed(range(H)):
         discount = gamma * continues[:, t]
-        # Use NEXT state's value for one-step bootstrap
+        # USE NEXT STATE VALUE FOR ONE-STEP BOOTSTRAP
         next_state_value = values[:, t + 1] if t < H - 1 else last_value
         blend = (1 - lam) * next_state_value + lam * next_val
         targets[:, t] = rewards[:, t] + discount * blend
         next_val = targets[:, t]
-    
+
     return targets
-    
+
 
 class ReturnNormalizer:
-    """Normalizes advantages by the 5th-95th percentile range of recent returns.
-    
-    Robust under sparse rewards where std≈0 would cause division-by-zero explosion.
-    EMA-tracked percentiles (decay=0.99) adapt smoothly as training progresses."""
-    
+    """ NORMALIZES ADVANTAGES BY 5TH-95TH PERCENTILE RANGE OF RECENT RETURNS """
+
     def __init__(
         self,
-        decay : float = 0.99,               # EMA DECAY FOR TRACKING RETURN PERCENTILES
-        low_percentile : float = 5.0,       # LOW PERCENTILE FOR NORMALIZATION
-        high_percentile : float = 95.0,     # HIGH PERCENTILE FOR NORMALIZATION
+        decay : float = 0.99,
+        low_percentile : float = 5.0,
+        high_percentile : float = 95.0,
     ):
         self.decay = decay
         self.low_percentile = low_percentile
         self.high_percentile = high_percentile
-        self.low_ema = 0.0   # initialized on first update via cold-start branch
-        self.high_ema = 1.0  # default range of 1 until first real batch arrives
-    
+        self.low_ema = 0.0   # INITIALIZED ON FIRST UPDATE
+        self.high_ema = 1.0  # DEFAULT RANGE UNTIL FIRST REAL BATCH
+
     @torch.no_grad()
     def update(
         self,
-        returns : torch.Tensor,             # (B,) RETURNS FROM RECENT BATCH
+        returns : torch.Tensor,
     ):
-        """ Update EMA of return percentiles based on recent returns. 
-        (since Atari rewards can be sparse, 
-        we use percentiles instead of mean/std for robustness) """
-        
+        """ UPDATE EMA OF RETURN PERCENTILES """
+
         low = torch.quantile(input = returns, q = self.low_percentile / 100).item()
         high = torch.quantile(input = returns, q = self.high_percentile / 100).item()
-        
-        # COLD START: seed EMAs from first real batch instead of multiplying None
+
+        # COLD START: SEED EMAS FROM FIRST REAL BATCH
         if self.low_ema == 0.0 and self.high_ema == 1.0:
             self.low_ema = low
             self.high_ema = high
             return
-        
+
         # UPDATE LOW AND HIGH EMA
         self.low_ema = self.decay * self.low_ema + (1 - self.decay) * low
         self.high_ema = self.decay * self.high_ema + (1 - self.decay) * high
-        
-        
+
+
     def normalize(
         self,
-        x : torch.Tensor,                     # (B,) ADVANTAGES TO NORMALIZE
+        x : torch.Tensor,
     ) -> torch.Tensor:
-        """ Normalize x by the EMA-tracked percentile range of returns.
-        Land in a consistent, sensible magintude for stable PPO training. """
-        
-        # EMA RANGE , AVOID DIV BY ZERO
-        scale = max(self.high_ema - self.low_ema, 1.0) 
-        
+        """ NORMALIZE X BY EMA-TRACKED PERCENTILE RANGE """
+
+        # EMA RANGE, AVOID DIV BY ZERO
+        scale = max(self.high_ema - self.low_ema, 1.0)
+
         return x / scale
-        
+
 def count_policy_params(
     critic : CriticNetwork,
     actor : ActorNetwork,
@@ -484,21 +559,21 @@ def count_policy_params(
     continue_net : ContinueNetwork,
     feature_extractor : Optional[HierarchicalFeatureExtractor] = None,
 ) -> dict:
-    """Counts trainable parameters across all four networks. Sanity check: should be ~1.5-3M total"""
-    
+    """ COUNT TRAINABLE PARAMETERS ACROSS ALL POLICY NETWORKS """
+
     counts = {
         'actor' : sum(p.numel() for p in actor.parameters() if p.requires_grad),
         'critic' : sum(p.numel() for p in critic.parameters() if p.requires_grad),
         'reward_net' : sum(p.numel() for p in reward_net.parameters() if p.requires_grad),
         'continue_net' : sum(p.numel() for p in continue_net.parameters() if p.requires_grad),
     }
-    
+
     # OPTIONAL FEATURE EXTRACTOR PARAM COUNT
     if feature_extractor is not None:
         counts['feature_extractor'] = sum(
             p.numel() for p in feature_extractor.parameters() if p.requires_grad
         )
-    
+
     counts['total'] = sum(counts.values())
-    
+
     return counts
