@@ -186,6 +186,51 @@ class TokenReplayBuffer:
         
         return {'tokens' : tokens, 'actions' : actions}
     
+    def sample_reward_biased_seed(
+        self,
+        batch_size  : int,
+        context_len : int = 16,
+        nonzero_fraction : float = 0.5,
+    ) -> Dict[str, torch.Tensor]:
+        """Sample seed contexts with half from near non-zero reward events.
+
+        WHY: 99% of Pong timesteps have reward=0. Pure random seeding means
+        ~86% of 15-step imagination rollouts contain zero reward, giving no actor
+        gradient. Oversampling near-reward states ensures imagined trajectories
+        actually contain the scoring events the policy needs to learn from.
+
+        nonzero_fraction: fraction of batch seeded from near-reward events.
+                          The rest are random (prevents overfitting to rare events).
+        """
+        # Find all timesteps with non-zero reward
+        nonzero_idx = torch.where(self._rewards[:self._size].abs() > 1e-4)[0]
+
+        nonzero_n = int(batch_size * nonzero_fraction) if len(nonzero_idx) > 0 else 0
+        random_n  = batch_size - nonzero_n
+
+        parts = []
+
+        if nonzero_n > 0:
+            # Pick random reward events, then back up so the reward falls
+            # near the END of the context window (the WM can see lead-up)
+            chosen = nonzero_idx[torch.randint(len(nonzero_idx), (nonzero_n,))]
+            # Place reward ~75% through context so rollout can reach it quickly
+            offset = max(1, int(context_len * 0.75))
+            starts = (chosen.long() - offset).clamp(0, self._size - context_len)
+            parts.append(starts)
+
+        if random_n > 0:
+            max_start = max(1, self._size - context_len)
+            parts.append(torch.randint(0, max_start, (random_n,)))
+
+        start_indices = torch.cat(parts, dim=0)[:batch_size]
+
+        indices = self._build_sequence_indices(start_indices, context_len)
+        tokens  = self._tokens[indices].to(self.device)   # (B, context_len, 3)
+        actions = self._actions[indices].to(self.device)  # (B, context_len)
+
+        return {'tokens': tokens, 'actions': actions}
+
     def sample_wm_batch(
         self,
         batch_size : int,

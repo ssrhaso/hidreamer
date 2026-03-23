@@ -42,6 +42,18 @@ policy:
   return_normalizer_decay: 0.99    # Decay for return normalizer(DreamerV3)
   unimix: 0.01                     # Policy uniform mixture (DreamerV3: 1%)
 
+  # REWARD CLASS-IMBALANCE FIX
+  # Pong: ~1% of steps have non-zero reward. Plain MSE collapses to predicting 0
+  # everywhere (degenerate mode: reward_loss=0.0002, reward_pred_std~0).
+  # Upweight non-zero events so the network actually learns to detect scoring.
+  reward_nonzero_weight: 20.0      # Multiply gradient of non-zero reward steps by this factor
+
+  # REWARD-BIASED IMAGINATION SEEDING
+  # Without this: ~86% of 15-step rollouts contain no reward (all-zero returns,
+  # no actor gradient). With this: 50% of seeds come from near-reward states.
+  reward_biased_seed: true         # Enable reward-biased seed sampling
+  reward_biased_fraction: 0.5      # Fraction of batch seeded from near-reward events
+
   # TRAINING LOOP
   total_steps: 100000        # Total imagination training steps
   collect_interval: 500      # 500 = 1:1 train:collect ratio with 500 env steps per imagination step

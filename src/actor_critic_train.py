@@ -282,10 +282,18 @@ class ActorCriticTrainer:
             continue_loss = -self.Bernoulli(logits = continue_logits).log_prob(continue_target)
             continue_loss = continue_loss.mean()
             
-            # REWARD NETWORK LOSS (MSE) - SymLog of rewards (range handling)
+            # REWARD NETWORK LOSS (WEIGHTED MSE) - SymLog of rewards (range handling)
+            # WHY WEIGHTED: Pong has ~1% non-zero reward steps. Plain MSE collapses to
+            # predicting 0 everywhere (loss=0.0002 is the degenerate zero-prediction regime).
+            # Upweighting rare events by reward_nonzero_weight forces the network to actually
+            # learn the reward structure instead of ignoring it.
             reward_prediction = self.reward_network(features).squeeze(-1)
             reward_target = symlog(rewards.reshape(-1))
-            reward_loss = F.mse_loss(input = reward_prediction, target = reward_target)
+
+            nz_weight = self.config['policy'].get('reward_nonzero_weight', 20.0)
+            reward_weights = torch.ones_like(reward_target)
+            reward_weights[reward_target.abs() > 1e-4] = nz_weight
+            reward_loss = (reward_weights * (reward_prediction - reward_target) ** 2).mean()
             
             # BACKPROP AND OPTIMIZE
             aux_loss = reward_loss + continue_loss
@@ -300,10 +308,14 @@ class ActorCriticTrainer:
             total_reward_loss += reward_loss.item()
             total_continue_loss += continue_loss.item()
             
-        # RETURNS
+        # RETURNS — include reward-network health diagnostics
+        # reward_pred_std near-zero → degenerate collapse (predicting ~0 everywhere)
+        # reward_pred_nonzero_frac near-zero → not detecting reward events
         return {
             'aux/reward_loss': total_reward_loss / num_batches,
             'aux/continue_loss': total_continue_loss / num_batches,
+            'aux/reward_pred_std': reward_prediction.std().item(),
+            'aux/reward_pred_nonzero_frac': (reward_prediction.abs() > 0.1).float().mean().item(),
         }
         
     
@@ -690,10 +702,20 @@ class ActorCriticTrainer:
             """ Imagination Rollout (WORLD MODEL latent rollout)  """
             self.world_model.eval()  # Ensure world model is in eval mode for imagination
 
-            seed_context = self.replay_buffer.sample_seed_context(
-                batch_size = policy_config['batch_size'],
-                context_len = policy_config['seed_context_len']
-            )
+            # Use reward-biased seeding when configured — ensures imagination rollouts
+            # encounter scoring events instead of all-zero-reward trajectories (see diagnosis).
+            use_reward_biased = policy_config.get('reward_biased_seed', False)
+            if use_reward_biased:
+                seed_context = self.replay_buffer.sample_reward_biased_seed(
+                    batch_size = policy_config['batch_size'],
+                    context_len = policy_config['seed_context_len'],
+                    nonzero_fraction = policy_config.get('reward_biased_fraction', 0.5),
+                )
+            else:
+                seed_context = self.replay_buffer.sample_seed_context(
+                    batch_size = policy_config['batch_size'],
+                    context_len = policy_config['seed_context_len']
+                )
 
             imagined_trajectory = self.imagination.rollout(
                 seed_tokens = seed_context['tokens'],
@@ -717,7 +739,9 @@ class ActorCriticTrainer:
                     f"critic={actor_critic_metrics['critic/loss']:.4f} | "
                     f"ent={actor_critic_metrics['actor/entropy']:.3f} | "
                     f"ret={actor_critic_metrics['returns/mean']:.3f} | "
-                    f"rew_loss={aux_metrics['aux/reward_loss']:.4f}"
+                    f"rew_loss={aux_metrics['aux/reward_loss']:.4f} | "
+                    f"rew_std={aux_metrics['aux/reward_pred_std']:.4f} | "
+                    f"rew_nz={aux_metrics['aux/reward_pred_nonzero_frac']:.3f}"
                 )
                 
                 # Append WM metrics if joint training
