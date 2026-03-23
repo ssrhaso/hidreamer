@@ -216,6 +216,92 @@ def pixel_aux_loss(
     return (patch_weights * per_patch).mean()
 
 
+def patch_diversity_loss_fn(
+    encoder_feats: dict,   # {'l0': (B, 4, D), 'l1': (B, 16, D), 'l2': (B, 16, D)}
+) -> torch.Tensor:
+    """
+    Patch diversity loss: penalize high cosine similarity between patches in same frame.
+
+    Encoder outputs are L2-normalised, so dot product == cosine similarity.
+    For each level, compute the B×N×N pairwise similarity matrix, take the mean
+    of the off-diagonal entries (excluding self-similarity), and minimise that.
+    Forces patches within a frame to be dissimilar → richer spatial representations.
+    """
+    device = next(iter(encoder_feats.values())).device
+    total = torch.tensor(0.0, device=device)
+    n_levels = 0
+
+    for key in ['l0', 'l1', 'l2']:
+        feats = encoder_feats[key]   # (B, N, D) — already L2-normalised
+        B, N, D = feats.shape
+
+        # Pairwise cosine similarity: (B, N, N)
+        sim = torch.bmm(feats, feats.transpose(1, 2))
+
+        # Zero out diagonal (self-similarity = 1.0, not informative)
+        eye = torch.eye(N, device=device, dtype=torch.bool).unsqueeze(0)  # (1, N, N)
+        off_diag_sum = sim.masked_fill(eye, 0.0).sum()
+        mean_sim = off_diag_sum / (B * N * (N - 1))
+
+        total = total + mean_sim
+        n_levels += 1
+
+    return total / n_levels
+
+
+def token_entropy_loss_fn(
+    encoder_feats: dict,   # {'l0': (B,4,D), 'l1': (B,16,D), 'l2': (B,16,D)}
+    tokenizer,             # SpatialHRVQTokenizer — for codebook access
+    temperature: float = 0.5,
+) -> torch.Tensor:
+    """
+    Per-frame codebook entropy loss.
+
+    For each frame, compute a soft distribution over codebook entries (via
+    distance-based softmax on per-patch pre-quant features), then measure
+    the entropy of that per-frame distribution.  Penalises low entropy —
+    frames where all patches map to the same code.
+
+    Uses soft distances (differentiable via encoder features) so gradients
+    flow to the encoder even though token indices are discrete.
+    """
+    device = next(iter(encoder_feats.values())).device
+    total = torch.tensor(0.0, device=device)
+    n_levels = 0
+
+    for key, vq_layer in [('l0', tokenizer.vq_l0),
+                           ('l1', tokenizer.vq_l1),
+                           ('l2', tokenizer.vq_l2)]:
+        feats = encoder_feats[key]   # (B, N, D)
+        B, N, D = feats.shape
+        flat = feats.detach().reshape(B * N, D)   # detach: entropy as info signal
+
+        # Squared distances: (B*N, num_codes)
+        dists = (
+            flat.pow(2).sum(1, keepdim=True)
+            + vq_layer.codebook.weight.pow(2).sum(1)
+            - 2.0 * flat @ vq_layer.codebook.weight.t()
+        )
+
+        soft = F.softmax(-dists / temperature, dim=-1)  # (B*N, num_codes)
+        soft = soft.reshape(B, N, -1)                   # (B, N, num_codes)
+
+        # Per-frame marginal: average soft assignment over patches → (B, num_codes)
+        marginal = soft.mean(dim=1)
+
+        eps = 1e-8
+        entropy = -(marginal * (marginal + eps).log()).sum(dim=-1)          # (B,)
+        max_ent = torch.log(
+            torch.tensor(float(vq_layer.num_codebook_entries), device=device)
+        )
+        # Loss = mean(1 - normalised_entropy): 0=uniform, 1=collapsed to one code
+        level_loss = (1.0 - entropy / max_ent.clamp(min=eps)).mean()
+        total = total + level_loss
+        n_levels += 1
+
+    return total / n_levels
+
+
 def codebook_diversity_loss(
     vq_layer,
     feats: torch.Tensor,    # (B, N, D) — encoder embeddings (pre-quantise)
@@ -257,15 +343,19 @@ def compute_loss(
     encoder_feats:   dict,
     quant_feats:     dict,
     vq_loss:         torch.Tensor,
+    token_dict:      dict,           # {'l0':(B,4), 'l1':(B,16), 'l2':(B,16)} — discrete
     tokenizer:       SpatialHRVQTokenizer,
     pixel_heads:     dict,           # {'l0': PixelAuxHead, 'l1': ..., 'l2': ...}
     cfg_loss:        dict,
+    cfg_training:    dict,           # for patch_diversity_weight, entropy_weight
 ) -> tuple:
     """
     Full loss combining:
       1. Foreground-weighted commitment MSE (encoder ↔ codebook)
       2. Pixel auxiliary loss (predicting patch brightness via STE)
-      3. Codebook entropy diversity penalty
+      3. Codebook entropy diversity penalty (per-batch)
+      4. Patch diversity loss (cosine sim between patches in same frame)
+      5. Token entropy loss (per-frame soft entropy)
     """
     l0_w      = cfg_loss['l0_weight']
     l1_w      = cfg_loss['l1_weight']
@@ -275,6 +365,8 @@ def compute_loss(
     px_w      = cfg_loss['pixel_aux_weight']
     div_w     = cfg_loss['diversity_weight']
     div_temp  = cfg_loss['diversity_temp']
+    patch_div_w = cfg_training.get('patch_diversity_weight', 0.0)
+    ent_w       = cfg_training.get('entropy_weight', 0.0)
 
     # --- Foreground masks and pixel targets ---
     fg = compute_fg_masks(frames, fg_thr)               # 'l0':(B,4), 'l1':(B,16)
@@ -304,22 +396,36 @@ def compute_loss(
     px_l2 = pixel_aux_loss(pixel_heads['l2'], quant_feats['l2'], px_target['l2'], pw_l1)
     aux_loss = l0_w * px_l0 + l1_w * px_l1 + l2_w * px_l2
 
-    # --- 3. Codebook entropy diversity penalty ---
+    # --- 3. Codebook entropy diversity penalty (per-batch) ---
     div_l0 = codebook_diversity_loss(tokenizer.vq_l0, encoder_feats['l0'], div_temp)
     div_l1 = codebook_diversity_loss(tokenizer.vq_l1, encoder_feats['l1'], div_temp)
     div_l2 = codebook_diversity_loss(tokenizer.vq_l2, encoder_feats['l2'], div_temp)
     div_loss = (div_l0 + div_l1 + div_l2) / 3.0
 
-    total = commit_loss + px_w * aux_loss + div_w * div_loss
+    # --- 4. Patch diversity loss (cosine similarity between patches in same frame) ---
+    patch_div = patch_diversity_loss_fn(encoder_feats)
+
+    # --- 5. Per-frame token entropy loss ---
+    ent_loss = token_entropy_loss_fn(encoder_feats, tokenizer, temperature=div_temp)
+
+    total = (
+        commit_loss
+        + px_w      * aux_loss
+        + div_w     * div_loss
+        + patch_div_w * patch_div
+        + ent_w     * ent_loss
+    )
 
     info = {
-        'loss_commit': commit_loss.item(),
-        'loss_pixel':  aux_loss.item(),
-        'loss_div':    div_loss.item(),
-        'loss_total':  total.item(),
-        'entropy_l0':  1.0 - div_l0.item(),   # 0=collapsed, 1=uniform
-        'entropy_l1':  1.0 - div_l1.item(),
-        'entropy_l2':  1.0 - div_l2.item(),
+        'loss_commit':     commit_loss.item(),
+        'loss_pixel':      aux_loss.item(),
+        'loss_div':        div_loss.item(),
+        'loss_patch_div':  patch_div.item(),
+        'loss_entropy':    ent_loss.item(),
+        'loss_total':      total.item(),
+        'entropy_l0':      1.0 - div_l0.item(),   # 0=collapsed, 1=uniform
+        'entropy_l1':      1.0 - div_l1.item(),
+        'entropy_l2':      1.0 - div_l2.item(),
     }
     return total, info
 
@@ -371,9 +477,10 @@ def kmeans_init_codebooks(
         init_codes = all_embs[idx].to(device)       # (num_codes, D)
 
         vq_layer.codebook.weight.data.copy_(init_codes)
-        vq_layer.ema_weight.copy_(init_codes)
-        # Reset cluster sizes to uniform so EMA starts fresh
-        vq_layer.ema_cluster_size.fill_(1.0)
+        if hasattr(vq_layer, 'ema_weight'):
+            vq_layer.ema_weight.copy_(init_codes)
+            # Reset cluster sizes to uniform so EMA starts fresh
+            vq_layer.ema_cluster_size.fill_(1.0)
 
         print(f"    {key}: initialised from {len(all_embs):,} embeddings  "
               f"(norm range [{init_codes.norm(dim=1).min():.3f}, "
@@ -414,6 +521,7 @@ def measure_codebook_usage(
     stats = {
         key: {
             'unique': len(used[key]),
+            'total':  totals[key],
             'pct':    100.0 * len(used[key]) / totals[key],
         }
         for key in ['l0', 'l1', 'l2']
@@ -457,6 +565,7 @@ def train(config_path: str, use_wandb: bool = False, device_str: str = 'cuda'):
         commitment_costs=config['tokenizer']['commitment_costs'],
         decay=config['tokenizer']['decay'],
         epsilon=config['tokenizer']['epsilon'],
+        use_gradient_vq=config['training'].get('use_gradient_vq', False),
     ).to(device)
 
     # Training-only pixel auxiliary heads (NOT saved in checkpoint)
@@ -522,7 +631,10 @@ def train(config_path: str, use_wandb: bool = False, device_str: str = 'cuda'):
     step = 0
 
     # Running averages for step-level logging
-    running = {k: 0.0 for k in ['loss_commit', 'loss_pixel', 'loss_div', 'loss_total']}
+    running = {k: 0.0 for k in [
+        'loss_commit', 'loss_pixel', 'loss_div',
+        'loss_patch_div', 'loss_entropy', 'loss_total',
+    ]}
     running_n = 0
 
     for epoch in range(1, num_epochs + 1):
@@ -540,7 +652,8 @@ def train(config_path: str, use_wandb: bool = False, device_str: str = 'cuda'):
                 token_dict, vq_loss, quant_dict = tokenizer(spatial_feats)
                 loss, info = compute_loss(
                     frames, spatial_feats, quant_dict, vq_loss,
-                    tokenizer, pixel_heads, cfg_loss,
+                    token_dict, tokenizer, pixel_heads, cfg_loss,
+                    config['training'],
                 )
 
             scaler.scale(loss).backward()
@@ -565,6 +678,8 @@ def train(config_path: str, use_wandb: bool = False, device_str: str = 'cuda'):
                     f"commit={avgs['loss_commit']:.4f}  "
                     f"pixel={avgs['loss_pixel']:.4f}  "
                     f"div={avgs['loss_div']:.4f}  "
+                    f"patch_div={avgs['loss_patch_div']:.4f}  "
+                    f"ent={avgs['loss_entropy']:.4f}  "
                     f"entropy=[{info['entropy_l0']:.2f},"
                     f"{info['entropy_l1']:.2f},{info['entropy_l2']:.2f}]"
                 )
@@ -591,7 +706,8 @@ def train(config_path: str, use_wandb: bool = False, device_str: str = 'cuda'):
                     token_dict_v, vq_loss_v, quant_dict_v = tokenizer(spatial_feats)
                     loss_v, _ = compute_loss(
                         frames, spatial_feats, quant_dict_v, vq_loss_v,
-                        tokenizer, pixel_heads, cfg_loss,
+                        token_dict_v, tokenizer, pixel_heads, cfg_loss,
+                        config['training'],
                     )
                     val_loss_sum += loss_v.item()
                     val_n += 1
@@ -602,7 +718,7 @@ def train(config_path: str, use_wandb: bool = False, device_str: str = 'cuda'):
             usage = measure_codebook_usage(encoder, tokenizer, train_loader, device)
             print(f"\nEpoch {epoch} — val_loss={val_loss:.4f}")
             for key, stat in usage.items():
-                print(f"  codebook {key}: {stat['unique']:3d}/256 ({stat['pct']:.1f}%) used")
+                print(f"  codebook {key}: {stat['unique']:3d}/{stat['total']:3d} ({stat['pct']:.1f}%) used")
 
             if use_wandb:
                 import wandb
