@@ -58,7 +58,7 @@ class SpatialAtariEncoder(nn.Module):
         self.input_channels = input_channels
         self.d_model = d_model
 
-        # --- Shared CNN backbone ---
+        # Shared CNN backbone
         # Identical strides to encoder_v1 so weights can be transferred if desired.
         self.conv1 = nn.Sequential(
             nn.Conv2d(input_channels, 32, kernel_size=8, stride=4, padding=0),
@@ -75,14 +75,14 @@ class SpatialAtariEncoder(nn.Module):
             nn.ReLU(inplace=True),
         )  # (B,64,7,7)
 
-        # --- Per-level heads ---
-        # Each head: adaptive pool → 1×1 conv (channel projection) → LayerNorm
+        # Per-level heads
+        # Each head: adaptive pool → 1×1 conv (channel projection) → GroupNorm
         # Using 1×1 conv rather than a flat Linear keeps computation local to each patch.
 
         # L0 head: coarse physics from shallow features
         self.l0_pool = nn.AdaptiveAvgPool2d((2, 2))   # (B,32,2,2)
         self.l0_proj = nn.Conv2d(32, d_model, kernel_size=1)  # (B,384,2,2)
-        self.l0_norm = nn.GroupNorm(1, d_model)  # LayerNorm over spatial patches
+        self.l0_norm = nn.GroupNorm(1, d_model)  # GroupNorm across all channels per batch element
 
         # L1 head: object-level features from mid-level
         self.l1_pool = nn.AdaptiveAvgPool2d((4, 4))   # (B,64,4,4)
@@ -104,18 +104,6 @@ class SpatialAtariEncoder(nn.Module):
                     nn.init.constant_(m.bias, 0)
 
     def forward(self, x: torch.Tensor) -> dict:
-        """
-        Parameters
-        ----------
-        x : (B, 4, 84, 84) — stacked grayscale frames in [0, 255] or [0, 1]
-
-        Returns
-        -------
-        dict with keys:
-            'l0': (B,  4, 384)
-            'l1': (B, 16, 384)
-            'l2': (B, 16, 384)
-        """
         # Normalise to [0, 1] if uint8-style input
         if x.dtype == torch.uint8:
             x = x.float() / 255.0
@@ -153,7 +141,6 @@ class SpatialAtariEncoder(nn.Module):
         return sum(p.numel() for p in self.parameters() if p.requires_grad)
 
 
-# ---------------------------------------------------------------------------
 if __name__ == "__main__":
     print("=" * 60)
     print("SMOKE TEST: SpatialAtariEncoder (encoder_v2)")
