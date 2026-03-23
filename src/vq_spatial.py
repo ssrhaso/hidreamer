@@ -8,9 +8,9 @@ each spatial level produced by SpatialAtariEncoder.
 Each spatial patch is quantized independently (batch dimension is B*N_patches).
 
     Input (dict from SpatialAtariEncoder.forward):
-        'l0': (B,  4, 384)  — coarse 2×2 patches
-        'l1': (B, 16, 384)  — mid 4×4 patches
-        'l2': (B, 16, 384)  — fine 4×4 patches
+        'l0': (B,  4, 384)  — coarse 2x2 patches
+        'l1': (B, 16, 384)  — mid 4x4 patches
+        'l2': (B, 16, 384)  — fine 4x4 patches
 
     Output:
         token_dict:
@@ -46,9 +46,7 @@ NUM_L1_PATCHES = 16
 NUM_L2_PATCHES = 16
 
 
-# ---------------------------------------------------------------------------
 # Gradient-based VQ (replaces EMA when use_gradient_vq=True)
-# ---------------------------------------------------------------------------
 class GradientVQ(nn.Module):
     """
     Gradient-based vector quantisation with straight-through estimator.
@@ -76,18 +74,10 @@ class GradientVQ(nn.Module):
         nn.init.uniform_(self.codebook.weight, -1.0 / num_codes, 1.0 / num_codes)
 
     def forward(self, x: torch.Tensor):
-        """
-        x : (..., dim) — arbitrary batch shape, last dim is the embedding.
-        Returns
-        -------
-        quantized_st : (..., dim) — STE quantised (same shape as x)
-        vq_loss      : scalar
-        indices      : (...,)     — integer indices, same leading shape as x
-        """
         orig_shape = x.shape
         flat = x.reshape(-1, orig_shape[-1])           # (N, D)
 
-        # Pairwise squared distance to all codebook entries
+        # Pairwise distances to all codebook entries
         dists = torch.cdist(flat, self.codebook.weight)  # (N, num_codes)
         indices_flat = dists.argmin(dim=-1)              # (N,)
         quantized_flat = self.codebook(indices_flat)     # (N, D)
@@ -188,7 +178,7 @@ class SpatialHRVQTokenizer(nn.Module):
                 layer_idx=2,
             )
 
-        # --- Dead-code tracking ---
+        # Dead-code tracking
         # Separate buffer per level because sizes differ.
         self.register_buffer('_usage_l0', torch.zeros(num_codes_l0, dtype=torch.long))
         self.register_buffer('_usage_l1', torch.zeros(num_codes_l1, dtype=torch.long))
@@ -197,9 +187,7 @@ class SpatialHRVQTokenizer(nn.Module):
         # Step counter (plain int — resets harmlessly on checkpoint resume)
         self._train_step = 0
 
-    # ------------------------------------------------------------------
     # Dead-code revival
-    # ------------------------------------------------------------------
     @torch.no_grad()
     def _revive_dead_codes(
         self,
@@ -230,7 +218,7 @@ class SpatialHRVQTokenizer(nn.Module):
         new_codes = new_codes + self.revival_noise * torch.randn_like(new_codes)
         new_codes = F.normalize(new_codes, p=2, dim=-1)
 
-        # --- Update codebook weights (shared by both EMA and gradient VQ) ---
+        # Update codebook weights (shared by both EMA and gradient VQ)
         vq_layer.codebook.weight.data[dead_idx] = new_codes
 
         # EMA-specific state — only present on VQVAE, not on GradientVQ.
@@ -258,7 +246,6 @@ class SpatialHRVQTokenizer(nn.Module):
         idx1: torch.Tensor,   # (B, 16)
         idx2: torch.Tensor,   # (B, 16)
     ):
-        """Add current-batch assignment counts to the rolling usage buffers."""
         for idx, buf in [(idx0, self._usage_l0),
                          (idx1, self._usage_l1),
                          (idx2, self._usage_l2)]:
@@ -272,13 +259,6 @@ class SpatialHRVQTokenizer(nn.Module):
         l1_feats: torch.Tensor,  # (B, 16, d_model)
         l2_feats: torch.Tensor,  # (B, 16, d_model)
     ) -> dict:
-        """
-        Check for dead codes and revive them if the revival interval has elapsed.
-
-        Called from forward() when self.training is True.
-
-        Returns a dict with revival counts per level (all zeros if not a revival step).
-        """
         self._train_step += 1
         counts = {'l0': 0, 'l1': 0, 'l2': 0}
 
@@ -301,9 +281,6 @@ class SpatialHRVQTokenizer(nn.Module):
 
         return counts
 
-    # ------------------------------------------------------------------
-    # Forward
-    # ------------------------------------------------------------------
     def forward(self, spatial_feats: dict):
         """
         Parameters
@@ -331,7 +308,7 @@ class SpatialHRVQTokenizer(nn.Module):
 
         total_vq_loss = loss0 + loss1 + loss2
 
-        # --- Dead-code tracking + revival (training mode only) ---
+        # Dead-code tracking + revival (training mode only)
         if self.training:
             self._accumulate_usage(idx0, idx1, idx2)
             self.maybe_revive(l0_feats, l1_feats, l2_feats)
@@ -343,7 +320,6 @@ class SpatialHRVQTokenizer(nn.Module):
 
     @torch.no_grad()
     def encode(self, spatial_feats: dict) -> dict:
-        """Encode spatial features to token indices (no gradient)."""
         token_dict, _, _ = self.forward(spatial_feats)
         return token_dict
 
@@ -351,17 +327,7 @@ class SpatialHRVQTokenizer(nn.Module):
     def decode(self, token_dict: dict) -> dict:
         """
         Decode token indices back to patch embeddings.
-
-        Parameters
-        ----------
-        token_dict : dict
-            'l0': (B, 4) | (B, T, 4) — integer indices
-            'l1': (B, 16) | (B, T, 16)
-            'l2': (B, 16) | (B, T, 16)
-
-        Returns
-        -------
-        dict of quantised embeddings matching input shape + (d_model,)
+        Supports both (B, N) and (B, T, N) index shapes.
         """
         out = {}
         for key, vq in [('l0', self.vq_l0), ('l1', self.vq_l1), ('l2', self.vq_l2)]:
@@ -386,7 +352,6 @@ class SpatialHRVQTokenizer(nn.Module):
         return stats
 
 
-# ---------------------------------------------------------------------------
 if __name__ == "__main__":
     print("=" * 60)
     print("SMOKE TEST: SpatialHRVQTokenizer (vq_spatial)")
@@ -443,7 +408,7 @@ if __name__ == "__main__":
     for key, stat in usage.items():
         print(f"  {key}: {stat['unique_codes']}/{stat['total_codes']} codes ({stat['usage_pct']:.1f}%)")
 
-    # --- Revival smoke test ---
+    # Revival smoke test
     # Force a revival check by simulating `revival_interval` steps.
     print(f"\nRevival smoke test (interval={tokenizer.revival_interval} steps):")
     tokenizer.train()
@@ -477,9 +442,7 @@ if __name__ == "__main__":
 
     print("\nSpatialHRVQTokenizer (EMA mode): PASSED")
 
-    # ------------------------------------------------------------------
     # GradientVQ mode smoke test
-    # ------------------------------------------------------------------
     print("\n" + "=" * 60)
     print("SMOKE TEST: SpatialHRVQTokenizer with GradientVQ")
     print("=" * 60)
