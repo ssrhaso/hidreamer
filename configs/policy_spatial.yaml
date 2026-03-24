@@ -1,0 +1,65 @@
+
+# SPATIAL HI-DREAMER POLICY TRAINING CONFIG
+
+policy:
+  feature_mode: "hidden_state"
+
+  hidden_dim: 512
+
+  game: "Pong-v5"
+  num_actions: 6
+
+  horizon_mode: "flat"
+  max_horizon: 15
+  min_horizon: 5
+  flat_horizon: 15
+  temperature: 1.0
+  seed_context_len: 16
+
+  batch_size: 32
+
+  actor_lr: 3.0e-5
+  critic_lr: 3.0e-5
+  aux_lr: 1.0e-4
+  aux_batch_size: 32
+  aux_max_norm: 100.0
+  actor_max_norm: 100.0
+  critic_max_norm: 100.0
+  critic_slow_target_tau: 0.02
+
+  gamma: 0.997
+  lambda: 0.95
+
+  entropy_scale: 3.0e-3
+  return_normalizer_decay: 0.99
+  unimix: 0.01
+
+  use_cpc: true
+  cpc_proj_dim: 256
+  cpc_k_steps: 3
+  cpc_temperature: 0.1
+  cpc_scale: 0.5
+  cpc_lr: 1.0e-4
+
+  reward_nonzero_weight: 20.0
+
+  reward_biased_seed: true
+  reward_biased_fraction: 0.5
+
+  total_steps: 100000
+  aux_batches: 1
+  eval_every: 5000
+  log_every: 100
+
+  offline_mode: true
+
+frozen_models:
+  spatial_world_model: "checkpoints/world_model_spatial/best_model.pt"
+  spatial_world_model_config: "configs/worldmodel_spatial.yaml"
+
+data:
+  tokens_dir: "checkpoints/spatial_tokens"
+
+logging:
+  save_dir: "checkpoints/policy_spatial"
+  wandb_project: "hi-dreamer-spatial-policy"
