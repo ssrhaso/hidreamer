@@ -100,6 +100,14 @@ class SpatialImagineRollout:
         Run frozen WM, pool per level, pass through feature extractor.
         Returns (B, feat_dim) for the LAST timestep.
         """
+        def _trim(t, max_t=MAX_CONTEXT_T):
+            return t[:, -max_t:] if t.size(1) > max_t else t
+
+        context_l0      = _trim(context_l0)
+        context_l1      = _trim(context_l1)
+        context_l2      = _trim(context_l2)
+        context_actions = _trim(context_actions)
+
         out = self.world_model(context_l0, context_l1, context_l2, context_actions)
         x   = out['hidden']            # (B, T*37, D)
         B   = x.size(0)
