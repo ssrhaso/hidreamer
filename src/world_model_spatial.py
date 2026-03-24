@@ -329,7 +329,7 @@ class SpatialHierarchicalWorldModel(nn.Module):
             C = logits.size(-1)
             return F.cross_entropy(logits.reshape(-1, C), targets.reshape(-1).long())
 
-        loss_l0 = ce(logits_l0, tokens_l0, skip_t0=True) if T > 1 else torch.tensor(0.0)
+        loss_l0 = ce(logits_l0, tokens_l0, skip_t0=True) if T > 1 else torch.tensor(0.0, device=tokens_l0.device)
         loss_l1 = ce(logits_l1, tokens_l1)
         loss_l2 = ce(logits_l2, tokens_l2)
 

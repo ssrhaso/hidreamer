@@ -47,7 +47,7 @@ training:
   eval_every: 1             # Evaluate every N epochs
 
 data:
-  games: ['Pong-v5', 'Breakout-v5', 'MsPacman-v5']
+  games: ['Pong-v5']
   tokens_dir: 'checkpoints/spatial_tokens'   # Output of extract_spatial_tokens.py
   val_split: 0.05
 
