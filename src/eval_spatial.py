@@ -19,7 +19,11 @@ from torch import autocast
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from world_model_spatial import SpatialHierarchicalWorldModel, SpatialWorldModelConfig
+from world_model_spatial import (
+    SpatialHierarchicalWorldModel, SpatialWorldModelConfig,
+    TOKENS_PER_TIMESTEP, NUM_L0, NUM_L1, NUM_L2,
+    L0_START, L0_END, L1_START, L1_END, L2_START, L2_END, ACTION_POS,
+)
 from encoder_v2 import SpatialAtariEncoder
 from vq_spatial import SpatialHRVQTokenizer
 from policy import ActorNetwork, HiddenStateFeatureExtractor
@@ -116,30 +120,79 @@ def encode_obs(obs, encoder, tokenizer, device, use_amp):
 @torch.no_grad()
 def get_features(wm, feat_ext, token_history_l0, token_history_l1,
                  token_history_l2, action_history, device, use_amp, max_ctx=5):
-    """Run frozen spatial WM on context to get features for the last timestep."""
+    """Get features via cascade path matching h>=1 training distribution.
+
+    Instead of wm.forward() (which produces features the actor never trained on),
+    we replicate the exact 3-pass cascade from imagination_spatial.py:
+      1. get_context_hidden() to prime KV cache (same as imagination seed)
+      2. Revert last timestep, re-embed with real action (Pass 1 → predict L0)
+      3. Extend with predicted L0 + zero L1/L2 (Pass 2 → predict L1)
+      4. Extend with predicted L0 + predicted L1 + zero L2 (Pass 3 → extract features)
+
+    This produces features identical to h>=1 imagination steps, which is 90% of
+    the actor's training distribution.
+    """
     ctx_l0 = torch.stack(token_history_l0[-max_ctx:]).unsqueeze(0).to(device)
     ctx_l1 = torch.stack(token_history_l1[-max_ctx:]).unsqueeze(0).to(device)
     ctx_l2 = torch.stack(token_history_l2[-max_ctx:]).unsqueeze(0).to(device)
     ctx_a  = torch.tensor(action_history[-max_ctx:]).unsqueeze(0).to(device)
 
-    # MATCH THE IMAGINATION CONTEXT 
-    # During training, features are from 3 pass cascade, but at eval time we only have one pass, so we need to match the context length to preserve feature semantics
+    B = ctx_l0.size(0)
+    T = ctx_l0.size(1)
+    P = TOKENS_PER_TIMESTEP
 
-    ctx_l2[:, -1, :] = 0
-    ctx_a[:, -1]     = 0
+    # STEP 1: PRIME KV CACHE WITH FULL CONTEXT (same as imagination seed)
+    with autocast(device_type=device.type, enabled=use_amp):
+        _, kv_cache = wm.get_context_hidden(ctx_l0, ctx_l1, ctx_l2, ctx_a)
+    cached_seq_len = T * P
+
+    # STEP 2: REVERT LAST TIMESTEP, RE-EMBED WITH REAL ACTION (Pass 1)
+    kv_reverted = [(K[:, :, :-P, :], V[:, :, :-P, :]) for (K, V) in kv_cache]
+    revert_len = cached_seq_len - P
+
+    prev_l0 = ctx_l0[:, -1:]   # (B, 1, 4)
+    prev_l1 = ctx_l1[:, -1:]   # (B, 1, 16)
+    prev_l2 = ctx_l2[:, -1:]   # (B, 1, 16)
+    prev_a  = ctx_a[:, -1:]    # (B, 1)
 
     with autocast(device_type=device.type, enabled=use_amp):
-        out = wm(ctx_l0, ctx_l1, ctx_l2, ctx_a)
-    x = out['hidden']
-    D = x.size(-1)
-    T = ctx_l0.size(1)
+        x_step0, kv_step0, len_step0 = wm.forward_incremental(
+            prev_l0, prev_l1, prev_l2, prev_a,
+            kv_reverted, revert_len,
+        )
 
-    x_ts = x.reshape(1, T, 37, D)
-    last = x_ts[:, -1, :, :]
+    # PREDICT L0 FROM ACTION HIDDEN
+    logits_l0 = wm.head_l0(x_step0[:, ACTION_POS, :])
+    new_l0_token = logits_l0.argmax(dim=-1)
+    new_l0 = new_l0_token.unsqueeze(1).expand(B, NUM_L0).unsqueeze(1)  # (B, 1, 4)
 
-    mean_l0 = last[:, 0:4,   :].mean(dim=1)
-    mean_l1 = last[:, 4:20,  :].mean(dim=1)
-    mean_l2 = last[:, 20:36, :].mean(dim=1)
+    zero_l1 = torch.zeros(B, 1, NUM_L1, dtype=torch.long, device=device)
+    zero_l2 = torch.zeros(B, 1, NUM_L2, dtype=torch.long, device=device)
+    zero_a  = torch.zeros(B, 1, dtype=torch.long, device=device)
+
+    # STEP 3: EXTEND WITH PREDICTED L0 + ZERO L1/L2 (Pass 2 → predict L1)
+    with autocast(device_type=device.type, enabled=use_amp):
+        x_step2, _, _ = wm.forward_incremental(
+            new_l0, zero_l1, zero_l2, zero_a,
+            kv_step0, len_step0,
+        )
+
+    logits_l1 = wm.head_l1(x_step2[:, L0_END - 1, :])
+    new_l1_token = logits_l1.argmax(dim=-1)
+    new_l1 = new_l1_token.unsqueeze(1).expand(B, NUM_L1).unsqueeze(1)  # (B, 1, 16)
+
+    # STEP 4: EXTEND WITH PREDICTED L0 + L1 + ZERO L2 (Pass 3 → features)
+    with autocast(device_type=device.type, enabled=use_amp):
+        x_step3, _, _ = wm.forward_incremental(
+            new_l0, new_l1, zero_l2, zero_a,
+            kv_step0, len_step0,
+        )
+
+    # EXTRACT FEATURES FROM PASS 3 (matches h>=1 training features exactly)
+    x_step3 = x_step3.float()
+    mean_l0 = x_step3[:, L0_START:L0_END, :].mean(dim=1)
+    mean_l1 = x_step3[:, L1_START:L1_END, :].mean(dim=1)
+    mean_l2 = x_step3[:, L2_START:L2_END, :].mean(dim=1)
     hidden_3 = torch.stack([mean_l0, mean_l1, mean_l2], dim=1)
     return feat_ext(hidden_3)
 
