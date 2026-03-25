@@ -109,6 +109,71 @@ def build_trainable_networks(config: dict, num_actions: int, device: torch.devic
     return feature_extractor, policy_net, critic, reward_net, continue_net
 
 
+def load_eval_components(config: dict, game: str, device: torch.device):
+    """Optionally load spatial encoder, tokenizer, and Atari env for eval.
+    Returns (env, encoder, tokenizer) or (None, None, None) if unavailable.
+    """
+    paths = config.get('frozen_models', {})
+    encoder_ckpt_path  = paths.get('spatial_encoder')
+    encoder_config_path = paths.get('spatial_encoder_config')
+
+    if not encoder_ckpt_path or not os.path.exists(encoder_ckpt_path):
+        print("  Spatial encoder checkpoint not found, eval disabled")
+        return None, None, None
+
+    if not encoder_config_path or not os.path.exists(encoder_config_path):
+        print("  Spatial encoder config not found, eval disabled")
+        return None, None, None
+
+    try:
+        import ale_py
+        import gymnasium as gym
+    except ImportError:
+        print("  gymnasium/ale_py not installed, eval disabled")
+        return None, None, None
+
+    from encoder_v2 import SpatialAtariEncoder
+    from vq_spatial import SpatialHRVQTokenizer
+
+    with open(encoder_config_path, 'r') as f:
+        enc_config = yaml.safe_load(f)
+
+    encoder = SpatialAtariEncoder(
+        input_channels=enc_config['model']['input_channels'],
+        d_model=enc_config['model']['d_model'],
+    ).to(device)
+
+    tokenizer = SpatialHRVQTokenizer(
+        d_model=enc_config['model']['d_model'],
+        num_codes_l0=enc_config['tokenizer']['num_codes_l0'],
+        num_codes_l1=enc_config['tokenizer']['num_codes_l1'],
+        num_codes_l2=enc_config['tokenizer']['num_codes_l2'],
+        commitment_costs=enc_config['tokenizer']['commitment_costs'],
+        decay=enc_config['tokenizer']['decay'],
+        epsilon=enc_config['tokenizer']['epsilon'],
+        use_gradient_vq=enc_config['training'].get('use_gradient_vq', False),
+    ).to(device)
+
+    ckpt = torch.load(encoder_ckpt_path, map_location=device, weights_only=False)
+    encoder.load_state_dict(ckpt['encoder_state_dict'])
+    tokenizer.load_state_dict(ckpt['tokenizer_state_dict'])
+    encoder.eval()
+    tokenizer.eval()
+    for p in list(encoder.parameters()) + list(tokenizer.parameters()):
+        p.requires_grad = False
+
+    print(f"  Spatial encoder loaded from {encoder_ckpt_path}")
+
+    ale_game = f"ALE/{game}" if not game.startswith("ALE/") else game
+    env = gym.make(ale_game)
+    env = gym.wrappers.AtariPreprocessing(env, frame_skip=1, screen_size=84,
+                                           grayscale_obs=True, scale_obs=False)
+    env = gym.wrappers.FrameStackObservation(env, stack_size=enc_config['model']['input_channels'])
+    print(f"  Eval env: {ale_game}")
+
+    return env, encoder, tokenizer
+
+
 def main():
     args   = parse_args()
     config = load_config(args.config)
@@ -163,18 +228,29 @@ def main():
     )
     print()
 
+    # OPTIONAL EVAL COMPONENTS
+    env, spatial_encoder, spatial_tokenizer = None, None, None
+    eval_every = config['policy'].get('eval_every', 0)
+    if eval_every > 0:
+        print("Loading EVAL components...")
+        env, spatial_encoder, spatial_tokenizer = load_eval_components(config, game, device)
+        print()
+
     print("Initializing TRAINER...")
     trainer = SpatialActorCriticTrainer(
-        world_model      = world_model,
+        world_model       = world_model,
         feature_extractor = feature_extractor,
-        policy           = policy_net,
-        critic           = critic,
-        reward_network   = reward_net,
-        continue_network = continue_net,
-        imagination      = imagination,
-        replay_buffer    = buffer,
-        config           = config,
-        device           = device,
+        policy            = policy_net,
+        critic            = critic,
+        reward_network    = reward_net,
+        continue_network  = continue_net,
+        imagination       = imagination,
+        replay_buffer     = buffer,
+        config            = config,
+        device            = device,
+        env               = env,
+        spatial_encoder   = spatial_encoder,
+        spatial_tokenizer = spatial_tokenizer,
     )
     print()
 

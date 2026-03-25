@@ -56,6 +56,9 @@ class SpatialActorCriticTrainer:
         replay_buffer:     SpatialTokenReplayBuffer,
         config:            dict,
         device:            torch.device = None,
+        env                = None,
+        spatial_encoder    = None,
+        spatial_tokenizer  = None,
     ):
         self.world_model      = world_model
         self.feature_extractor = feature_extractor
@@ -68,6 +71,11 @@ class SpatialActorCriticTrainer:
         self.config           = config
         self.device           = device or torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.use_amp          = device.type == 'cuda'
+
+        # OPTIONAL EVAL COMPONENTS (NONE IN PURE OFFLINE MODE)
+        self.env               = env
+        self.spatial_encoder   = spatial_encoder
+        self.spatial_tokenizer = spatial_tokenizer
 
         policy_config = config['policy']
 
@@ -189,7 +197,13 @@ class SpatialActorCriticTrainer:
         policy_config = self.config['policy']
         gamma         = policy_config['gamma']
         lam           = policy_config['lambda']
-        entropy_scale = policy_config['entropy_scale']
+
+        # LINEAR ENTROPY WARMDOWN SCHEDULE
+        entropy_start = policy_config['entropy_scale']
+        entropy_final = policy_config.get('entropy_scale_final', entropy_start)
+        warmdown      = policy_config.get('entropy_warmdown_steps', 50000)
+        frac          = min(self.global_step / max(warmdown, 1), 1.0)
+        entropy_scale = entropy_start + (entropy_final - entropy_start) * frac
 
         B, H, feat_dim = trajectory.feats.shape
 
@@ -253,14 +267,132 @@ class SpatialActorCriticTrainer:
             self.cpc_optimizer.step()
 
         return {
-            'actor/loss':       actor_loss.item(),
-            'actor/entropy':    trajectory.entropies.mean().item(),
-            'actor/cpc_loss':   cpc_loss_val,
-            'critic/loss':      critic_loss.item(),
-            'critic/value_mean': values.mean().item(),
-            'returns/mean':     lambda_returns.mean().item(),
-            'returns/std':      lambda_returns.std().item(),
-            'advantages/mean':  advantages.mean().item(),
+            'actor/loss':          actor_loss.item(),
+            'actor/entropy':       trajectory.entropies.mean().item(),
+            'actor/entropy_scale': entropy_scale,
+            'actor/cpc_loss':      cpc_loss_val,
+            'critic/loss':         critic_loss.item(),
+            'critic/value_mean':   values.mean().item(),
+            'returns/mean':        lambda_returns.mean().item(),
+            'returns/std':         lambda_returns.std().item(),
+            'advantages/mean':     advantages.mean().item(),
+            'advantages/std':      advantages.std().item(),
+            'advantages/abs_max':  advantages.abs().max().item(),
+            'retnorm/scale':       max(self.return_normalizer.high_ema - self.return_normalizer.low_ema, 1.0),
+            'retnorm/low_ema':     self.return_normalizer.low_ema,
+            'retnorm/high_ema':    self.return_normalizer.high_ema,
+            'actor/mode_action_frac': (trajectory.actions == trajectory.actions.mode(dim=-1).values.unsqueeze(-1)).float().mean().item(),
+        }
+
+    @torch.no_grad()
+    def _encode_spatial_observation(self, obs: np.ndarray) -> dict:
+        """Encode raw Atari frame to spatial token dict {l0, l1, l2}."""
+        frame = torch.from_numpy(obs.astype(np.float32) / 255.0).unsqueeze(0).permute(0, 3, 1, 2).to(self.device)
+        with autocast(device_type=self.device.type, enabled=self.use_amp):
+            spatial_feats = self.spatial_encoder(frame)
+            token_dict    = self.spatial_tokenizer.encode(spatial_feats)
+        return {
+            'l0': token_dict['l0'].squeeze(0),   # (4,)
+            'l1': token_dict['l1'].squeeze(0),   # (16,)
+            'l2': token_dict['l2'].squeeze(0),   # (16,)
+        }
+
+    @torch.no_grad()
+    def _get_spatial_features(
+        self,
+        token_history_l0: list,
+        token_history_l1: list,
+        token_history_l2: list,
+        action_history:   list,
+        max_ctx:          int = 5,
+    ) -> torch.Tensor:
+        """Run frozen spatial WM on context to get features for the last timestep."""
+        ctx_l0 = torch.stack(token_history_l0[-max_ctx:]).unsqueeze(0).to(self.device)  # (1, T, 4)
+        ctx_l1 = torch.stack(token_history_l1[-max_ctx:]).unsqueeze(0).to(self.device)  # (1, T, 16)
+        ctx_l2 = torch.stack(token_history_l2[-max_ctx:]).unsqueeze(0).to(self.device)  # (1, T, 16)
+        ctx_a  = torch.tensor(action_history[-max_ctx:]).unsqueeze(0).to(self.device)   # (1, T)
+
+        with autocast(device_type=self.device.type, enabled=self.use_amp):
+            out = self.world_model(ctx_l0, ctx_l1, ctx_l2, ctx_a)
+        x = out['hidden']  # (1, T*37, D)
+        D = x.size(-1)
+        T = ctx_l0.size(1)
+
+        x_ts = x.reshape(1, T, 37, D)
+        last = x_ts[:, -1, :, :]  # (1, 37, D)
+
+        mean_l0 = last[:, 0:4,   :].mean(dim=1)   # (1, D)
+        mean_l1 = last[:, 4:20,  :].mean(dim=1)
+        mean_l2 = last[:, 20:36, :].mean(dim=1)
+        hidden_3 = torch.stack([mean_l0, mean_l1, mean_l2], dim=1)  # (1, 3, D)
+        return self.feature_extractor(hidden_3)  # (1, feat_dim)
+
+    @torch.no_grad()
+    def evaluate(self, num_episodes: int = 5) -> dict:
+        """Evaluate policy on real Atari environment with greedy actions."""
+        if self.env is None or self.spatial_encoder is None or self.spatial_tokenizer is None:
+            return {}
+
+        self.policy.eval()
+        self.feature_extractor.eval()
+        returns = []
+        lengths = []
+
+        max_ctx = self.config['policy']['seed_context_len']
+
+        for _ in range(num_episodes):
+            obs, _ = self.env.reset()
+            episode_return = 0.0
+            episode_length = 0
+            done = False
+
+            token_history_l0 = []
+            token_history_l1 = []
+            token_history_l2 = []
+            action_history   = []
+
+            while not done:
+                tokens = self._encode_spatial_observation(obs)
+                token_history_l0.append(tokens['l0'].cpu())
+                token_history_l1.append(tokens['l1'].cpu())
+                token_history_l2.append(tokens['l2'].cpu())
+
+                # PAD ACTION HISTORY TO MATCH TOKEN HISTORY LENGTH
+                while len(action_history) < len(token_history_l0):
+                    action_history.append(0)
+
+                features = self._get_spatial_features(
+                    token_history_l0, token_history_l1, token_history_l2,
+                    action_history, max_ctx=max_ctx,
+                )
+
+                distribution = self.policy(features)
+                action = distribution.probs.argmax(dim=-1).item()
+
+                next_obs, reward, terminated, truncated, _ = self.env.step(action)
+                action_history.append(action)
+                done = terminated or truncated
+                episode_return += reward
+                episode_length += 1
+                obs = next_obs
+
+                # TRIM HISTORIES TO PREVENT MEMORY GROWTH
+                if len(token_history_l0) > max_ctx:
+                    token_history_l0 = token_history_l0[-max_ctx:]
+                    token_history_l1 = token_history_l1[-max_ctx:]
+                    token_history_l2 = token_history_l2[-max_ctx:]
+                    action_history   = action_history[-max_ctx:]
+
+            returns.append(episode_return)
+            lengths.append(episode_length)
+
+        self.policy.train()
+        self.feature_extractor.train()
+
+        return {
+            'eval/return_mean':  np.mean(returns),
+            'eval/return_std':   np.std(returns),
+            'eval/length_mean':  np.mean(lengths),
         }
 
     def train(
@@ -347,6 +479,8 @@ class SpatialActorCriticTrainer:
                     f"critic={ac_metrics['critic/loss']:.4f} | "
                     f"ent={ac_metrics['actor/entropy']:.3f} | "
                     f"ret={ac_metrics['returns/mean']:.3f} | "
+                    f"adv={ac_metrics['advantages/mean']:.4f} | "
+                    f"η={ac_metrics.get('actor/entropy_scale', 0):.1e} | "
                     f"rew_loss={aux_metrics['aux/reward_loss']:.4f} | "
                     f"rew_std={aux_metrics['aux/reward_pred_std']:.4f}"
                     + cpc_str
@@ -356,6 +490,11 @@ class SpatialActorCriticTrainer:
                     wandb.log({**aux_metrics, **ac_metrics, 'speed/sps': sps, 'horizon/current': current_horizon}, step=step)
 
             if step % policy_config.get('eval_every', 5000) == 0 and step > 0:
+                eval_metrics = self.evaluate(num_episodes=5)
+                if eval_metrics:
+                    print(f"  EVAL @ step {step}: return={eval_metrics['eval/return_mean']:.1f} +/- {eval_metrics['eval/return_std']:.1f}, len={eval_metrics['eval/length_mean']:.0f}")
+                    if use_wandb:
+                        wandb.log(eval_metrics, step=step)
                 self._save_checkpoint(os.path.join(save_directory, f"policy_step_{step}.pt"), step)
 
         self._save_checkpoint(os.path.join(save_directory, "final_policy.pt"), total_steps)

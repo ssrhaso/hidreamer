@@ -30,9 +30,11 @@ policy:
   gamma: 0.997
   lambda: 0.95
 
-  entropy_scale: 3.0e-3
+  entropy_scale: 3.0e-2
+  entropy_scale_final: 3.0e-3
+  entropy_warmdown_steps: 50000
   return_normalizer_decay: 0.99
-  unimix: 0.01
+  unimix: 0.03
 
   use_cpc: true
   cpc_proj_dim: 256
@@ -56,6 +58,8 @@ policy:
 frozen_models:
   spatial_world_model: "checkpoints/world_model_spatial/best_model.pt"
   spatial_world_model_config: "configs/worldmodel_spatial.yaml"
+  spatial_encoder: "checkpoints/spatial_encoder/spatial_encoder_best.pt"
+  spatial_encoder_config: "configs/encoder_spatial.yaml"
 
 data:
   tokens_dir: "checkpoints/spatial_tokens"
