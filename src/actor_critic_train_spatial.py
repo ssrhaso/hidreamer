@@ -312,6 +312,12 @@ class SpatialActorCriticTrainer:
         ctx_l2 = torch.stack(token_history_l2[-max_ctx:]).unsqueeze(0).to(self.device)  # (1, T, 16)
         ctx_a  = torch.tensor(action_history[-max_ctx:]).unsqueeze(0).to(self.device)   # (1, T)
 
+        # MATCH THE IMAGINATION CONTEXT
+        # During training, features are from 3 pass cascade, but at eval time we only have one pass, so we need to match the context length to preserve feature semantics
+
+        ctx_l2[:, -1, :] = 0
+        ctx_a[:, -1]     = 0
+
         with autocast(device_type=self.device.type, enabled=self.use_amp):
             out = self.world_model(ctx_l0, ctx_l1, ctx_l2, ctx_a)
         x = out['hidden']  # (1, T*37, D)
