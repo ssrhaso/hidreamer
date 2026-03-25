@@ -287,7 +287,7 @@ class SpatialActorCriticTrainer:
     @torch.no_grad()
     def _encode_spatial_observation(self, obs: np.ndarray) -> dict:
         """Encode raw Atari frame to spatial token dict {l0, l1, l2}."""
-        frame = torch.from_numpy(obs.astype(np.float32) / 255.0).unsqueeze(0).permute(0, 3, 1, 2).to(self.device)
+        frame = torch.from_numpy(obs.astype(np.float32) / 255.0).unsqueeze(0).to(self.device)
         with autocast(device_type=self.device.type, enabled=self.use_amp):
             spatial_feats = self.spatial_encoder(frame)
             token_dict    = self.spatial_tokenizer.encode(spatial_feats)
