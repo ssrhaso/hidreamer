@@ -170,7 +170,7 @@ def run_episode(wm, encoder, tokenizer, feat_ext, actor, env,
         action = dist.probs.argmax(dim=-1).item()
 
         next_obs, reward, terminated, truncated, _ = env.step(action)
-        action_history.append(action)
+        action_history[-1] = action   # replace placeholder with real action
         done = terminated or truncated
         episode_return += reward
         episode_length += 1
