@@ -189,49 +189,34 @@ def spatial_hierarchical_causal_mask(
     P = TOKENS_PER_TIMESTEP
     num_t = seq_len // P
 
-    mask = torch.triu(torch.ones(seq_len, seq_len, device=device), diagonal=1).bool()
+    # BUILD ON CPU TO AVOID PER-ELEMENT GPU KERNEL LAUNCHES
+    mask = torch.triu(torch.ones(seq_len, seq_len), diagonal=1).bool()
 
+    l0_off  = torch.arange(L0_START, L0_END)
+    l1_off  = torch.arange(L1_START, L1_END)
+    l2_off  = torch.arange(L2_START, L2_END)
+    l0l1_off = torch.cat([l0_off, l1_off])
+    all_off  = torch.arange(ACTION_POS)
+
+    # WITHIN-TIMESTEP HIERARCHY (VECTORIZED)
     for t in range(num_t):
         base = t * P
+        mask[(base + l1_off).unsqueeze(1), (base + l0_off).unsqueeze(0)] = False
+        mask[(base + l2_off).unsqueeze(1), (base + l0l1_off).unsqueeze(0)] = False
+        mask[base + ACTION_POS, base + all_off] = False
 
-        # L1: EACH PATCH SEES ALL L0 OF SAME TIMESTEP
-        for j in range(NUM_L1):
-            l1_pos = base + L1_START + j
-            for i in range(NUM_L0):
-                mask[l1_pos, base + L0_START + i] = False
+    # CROSS-TIMESTEP BLOCKING (VECTORIZED)
+    restricted_off = torch.cat([l1_off, l2_off, torch.tensor([ACTION_POS])])
+    blocked_off    = torch.cat([l1_off, l2_off])
 
-        # L2: EACH PATCH SEES ALL L0 AND ALL L1 OF SAME TIMESTEP
-        for k in range(NUM_L2):
-            l2_pos = base + L2_START + k
-            for i in range(NUM_L0):
-                mask[l2_pos, base + L0_START + i] = False
-            for j in range(NUM_L1):
-                mask[l2_pos, base + L1_START + j] = False
-
-        # ACTION: SEES ALL 36 PRECEDING TOKENS IN SAME TIMESTEP
-        act_pos = base + ACTION_POS
-        for i in range(ACTION_POS):
-            mask[act_pos, base + i] = False
-
-    # L1, L2, ACTION CANNOT ATTEND TO PAST L1/L2
     for t_q in range(1, num_t):
-        base_q = t_q * P
+        rows = t_q * P + restricted_off
         for t_k in range(t_q):
-            base_k = t_k * P
-            restricted_rows = (
-                list(range(base_q + L1_START, base_q + L1_END)) +
-                list(range(base_q + L2_START, base_q + L2_END)) +
-                [base_q + ACTION_POS]
-            )
-            blocked_cols = (
-                list(range(base_k + L1_START, base_k + L1_END)) +
-                list(range(base_k + L2_START, base_k + L2_END))
-            )
-            for row in restricted_rows:
-                for col in blocked_cols:
-                    mask[row, col] = True
+            cols = t_k * P + blocked_off
+            mask[rows.unsqueeze(1), cols.unsqueeze(0)] = True
 
-    return mask.float().masked_fill(mask, float('-inf'))
+    mask = mask.float().masked_fill(mask, float('-inf'))
+    return mask.to(device)
 
 
 # SPATIAL WORLD MODEL
@@ -254,12 +239,11 @@ class SpatialHierarchicalWorldModel(nn.Module):
         self._cached_mask_len = 0
 
     def _get_mask(self, seq_len: int, device: torch.device) -> torch.Tensor:
+        max_len = self.config.max_seq_len
         if (self._cached_mask is None
-                or self._cached_mask_len != seq_len
                 or self._cached_mask.device != device):
-            self._cached_mask = spatial_hierarchical_causal_mask(seq_len, device)
-            self._cached_mask_len = seq_len
-        return self._cached_mask
+            self._cached_mask = spatial_hierarchical_causal_mask(max_len, device)
+        return self._cached_mask[:seq_len, :seq_len]
 
     def forward(
         self,
