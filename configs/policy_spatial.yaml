@@ -14,7 +14,7 @@ policy:
   min_horizon: 5
   flat_horizon: 15
   temperature: 1.0
-  seed_context_len: 16
+  seed_context_len: 10
 
   batch_size: 32
 

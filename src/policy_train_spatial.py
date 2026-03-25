@@ -158,6 +158,9 @@ def main():
         max_horizon      = config['policy'].get('max_horizon', 15),
         temperature      = config['policy']['temperature'],
         device           = device,
+        use_amp          = True,
+        max_context_t    = 10,
+        compile_wm       = True,
     )
     print()
 

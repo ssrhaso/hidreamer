@@ -16,6 +16,7 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch import autocast
 from torch.optim import Adam
 from torch.distributions import Bernoulli
 
@@ -66,6 +67,7 @@ class SpatialActorCriticTrainer:
         self.replay_buffer    = replay_buffer
         self.config           = config
         self.device           = device or torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.use_amp          = device.type == 'cuda'
 
         policy_config = config['policy']
 
@@ -138,7 +140,8 @@ class SpatialActorCriticTrainer:
             B, L = tokens_l0.shape[:2]
 
             with torch.no_grad():
-                out = self.world_model(tokens_l0, tokens_l1, tokens_l2, actions)
+                with autocast(device_type=self.device.type, enabled=self.use_amp):
+                    out = self.world_model(tokens_l0, tokens_l1, tokens_l2, actions)
                 x   = out['hidden']          # (B, L*37, D)
                 D   = x.size(-1)
 
