@@ -368,6 +368,37 @@ class SpatialHierarchicalWorldModel(nn.Module):
         x = self.ln_final(x)
         return x, kv_cache
 
+    def forward_incremental(
+        self,
+        tokens_l0_new: torch.Tensor,   # (B, 1, 4)
+        tokens_l1_new: torch.Tensor,   # (B, 1, 16)
+        tokens_l2_new: torch.Tensor,   # (B, 1, 16)
+        actions_new:   torch.Tensor,   # (B, 1)
+        kv_cache: list,
+        cached_seq_len: int,
+    ) -> Tuple[torch.Tensor, list, int]:
+        """ INCREMENTAL FORWARD: EMBED 37 NEW POSITIONS, RUN AGAINST CACHED K/V """
+        x_new = self.embedding.embed_partial(
+            tokens_l0_new, tokens_l1_new, tokens_l2_new,
+            actions_new, start_pos=cached_seq_len,
+        )
+
+        total_len = cached_seq_len + TOKENS_PER_TIMESTEP
+
+        full_mask = self._get_mask(seq_len=total_len, device=x_new.device)
+        mask_rows = full_mask[cached_seq_len:total_len, :total_len]
+
+        updated_cache = []
+        for layer_idx, block in enumerate(self.blocks):
+            x_new, updated_kv = block.forward_incremental(
+                x_new, kv_cache[layer_idx], mask_rows
+            )
+            updated_cache.append(updated_kv)
+
+        x_new = self.ln_final(x_new)
+
+        return x_new, updated_cache, total_len
+
     def predict_next_tokens(
         self,
         hidden_last: torch.Tensor,
@@ -470,6 +501,59 @@ class _SpatialTransformerBlock(nn.Module):
 
         return x, (K, V)
 
+    def _incremental_attention(
+        self,
+        x_new_norm: torch.Tensor,
+        past_kv: Tuple[torch.Tensor, torch.Tensor],
+        mask_rows: torch.Tensor,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """ INCREMENTAL ATTENTION: Q_NEW ATTENDS TO [K_CACHED | K_NEW] """
+        B, new_len, D = x_new_norm.shape
+        n_heads = self.n_heads
+        d_head = self.d_head
+
+        K_cached, V_cached = past_kv
+
+        W = self.attn.in_proj_weight
+        b = self.attn.in_proj_bias
+
+        Q_new = F.linear(x_new_norm, W[:D], b[:D])
+        K_new = F.linear(x_new_norm, W[D:2*D], b[D:2*D])
+        V_new = F.linear(x_new_norm, W[2*D:], b[2*D:])
+
+        Q_new = Q_new.view(B, new_len, n_heads, d_head).transpose(1, 2)
+        K_new = K_new.view(B, new_len, n_heads, d_head).transpose(1, 2)
+        V_new = V_new.view(B, new_len, n_heads, d_head).transpose(1, 2)
+
+        K_full = torch.cat([K_cached, K_new], dim=2)
+        V_full = torch.cat([V_cached, V_new], dim=2)
+
+        attn_out = F.scaled_dot_product_attention(
+            Q_new, K_full, V_full,
+            attn_mask=mask_rows,
+            dropout_p=self.attn.dropout if self.training else 0.0,
+        )
+
+        attn_out = attn_out.transpose(1, 2).contiguous().view(B, new_len, D)
+        attn_out = self.attn.out_proj(attn_out)
+
+        return attn_out, K_full, V_full
+
+    def forward_incremental(
+        self,
+        x_new: torch.Tensor,
+        past_kv: Tuple[torch.Tensor, torch.Tensor],
+        mask_rows: torch.Tensor,
+    ) -> Tuple[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+        """ PROCESS ONLY NEW POSITIONS AGAINST CACHED K/V """
+        x_norm = self.ln1(x_new)
+        attn_out, updated_k, updated_v = self._incremental_attention(
+            x_norm, past_kv, mask_rows
+        )
+        x_new = x_new + attn_out
+        x_new = x_new + self.ffn(self.ln2(x_new))
+        return x_new, (updated_k, updated_v)
+
 
 if __name__ == "__main__":
     print("=" * 70)
@@ -527,5 +611,36 @@ if __name__ == "__main__":
     print(f"\nKV-cache context hidden: {list(hidden.shape)}")
     assert len(kv) == 2  # n_layers
 
-    print("\nSpatialHierarchicalWorldModel: PASSED")
+    # KV-CACHE INCREMENTAL FORWARD TEST
+    print("\nTesting forward_incremental (KV-cache)...")
+    T_ctx = 5
+    ctx_l0 = torch.randint(0, config.num_codes_l0, (B, T_ctx, NUM_L0))
+    ctx_l1 = torch.randint(0, config.num_codes_l1, (B, T_ctx, NUM_L1))
+    ctx_l2 = torch.randint(0, config.num_codes_l2, (B, T_ctx, NUM_L2))
+    ctx_a  = torch.randint(0, 6, (B, T_ctx))
+
+    hidden_ctx, kv_ctx = model.get_context_hidden(ctx_l0, ctx_l1, ctx_l2, ctx_a)
+    cached_len = T_ctx * TOKENS_PER_TIMESTEP
+    print(f"  Context hidden: {list(hidden_ctx.shape)}, cached_len={cached_len}")
+
+    new_l0 = torch.randint(0, config.num_codes_l0, (B, 1, NUM_L0))
+    new_l1 = torch.randint(0, config.num_codes_l1, (B, 1, NUM_L1))
+    new_l2 = torch.randint(0, config.num_codes_l2, (B, 1, NUM_L2))
+    new_a  = torch.randint(0, 6, (B, 1))
+
+    x_inc, kv_inc, new_len = model.forward_incremental(
+        new_l0, new_l1, new_l2, new_a, kv_ctx, cached_len
+    )
+    print(f"  Incremental output: {list(x_inc.shape)}")
+    print(f"  New cached length: {new_len}")
+
+    assert x_inc.shape == (B, TOKENS_PER_TIMESTEP, 128), f"Bad shape: {tuple(x_inc.shape)}"
+    assert new_len == cached_len + TOKENS_PER_TIMESTEP
+    assert len(kv_inc) == config.n_layers
+    for i, (K, V) in enumerate(kv_inc):
+        assert K.shape[2] == new_len, f"Layer {i} K cache size mismatch"
+    assert not torch.isnan(x_inc).any(), "NaN in incremental output"
+    print("  forward_incremental: PASSED")
+
+    print("\nSpatialHierarchicalWorldModel: ALL TESTS PASSED")
     print("=" * 70)

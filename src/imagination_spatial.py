@@ -1,43 +1,29 @@
 """
-OPTIMIZED SPATIAL IMAGINATION ROLLOUT FOR POLICY TRAINING
+KV-CACHED SPATIAL IMAGINATION ROLLOUT FOR POLICY TRAINING
 
-DROP-IN REPLACEMENT for imagination_spatial.py with three speed fixes:
+Replaces the 4-full-forward-per-step approach with incremental KV-cache:
+  BEFORE: 4 full 370-pos forwards per step x 15 steps = 60 x 370^2 attn ops
+  AFTER:  1 full forward for seed + 3 incremental 37-pos per step = ~10x speedup
 
-FIX 1: AMP (float16) on all frozen WM forwards
-  - RTX 5060 Ti: ~2x throughput for matmul-heavy transformer forwards
-  - Safe because WM is frozen (no gradient scaling needed)
-
-FIX 2: Reduced MAX_CONTEXT_T (15 → 10)
-  - Attention: 370² vs 555² = 2.25x reduction
-  - Pong policy doesn't need 15 timesteps of context for early training
-  - Configurable via constructor arg
-
-FIX 3: torch.compile on frozen WM forward (optional, ~10-30% kernel fusion)
-
-COMBINED SPEEDUP: ~3-5x over original imagination_spatial.py
-
-WHAT WOULD GIVE 10-20x MORE (future work):
-  - Implement forward_incremental() for _SpatialTransformerBlock
-  - Mirror the KV-cache cascade from imagination.py (_do_cached_cascade)
-  - Each cascade pass becomes O(37) instead of O(370) = 10x per pass
-  - The original (non-spatial) WM already has this; spatial just needs the port
-
-WHY WE CAN'T MERGE _extract_features INTO CASCADE PASS 1:
-  Features (from L0/L1/L2 hidden states) don't depend on the action at
-  position 36 (causal mask blocks it). But the actor needs features to
-  SELECT the action, and the cascade needs the action to PREDICT L0.
-  Merging would require KV-cache to re-process only position 36.
+The 3-pass cascade is preserved:
+  Pass 1: re-embed previous timestep with real action, predict L0
+  Pass 2: extend with real L0 + zeroed L1/L2, predict L1 (then revert)
+  Pass 3: extend with real L0 + real L1 + zeroed L2, predict L2
 """
 
 import torch
 import torch.nn.functional as F
 from torch import autocast
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Tuple
 
-from world_model_spatial import SpatialHierarchicalWorldModel
+from world_model_spatial import (
+    SpatialHierarchicalWorldModel,
+    TOKENS_PER_TIMESTEP, NUM_L0, NUM_L1, NUM_L2,
+    L0_START, L0_END, L1_START, L1_END, L2_START, L2_END, ACTION_POS,
+)
 
-MAX_CONTEXT_T = 10  # DOWN FROM 15: 370 vs 555 positions
+MAX_CONTEXT_T = 5
 
 
 @dataclass
@@ -58,7 +44,7 @@ class SpatialTrajectory:
 
 
 class SpatialImagineRollout:
-    """Run horizon-step imagination inside frozen SpatialHierarchicalWorldModel."""
+    """KV-cached imagination inside frozen SpatialHierarchicalWorldModel."""
 
     def __init__(
         self,
@@ -87,153 +73,153 @@ class SpatialImagineRollout:
         self.use_amp          = use_amp and (self.device.type == 'cuda')
         self.max_context_t    = max_context_t
 
-        # OPTIONAL: torch.compile for kernel fusion on frozen WM
-        if compile_wm and hasattr(torch, 'compile'):
-            self._wm_forward = torch.compile(self.world_model, mode='reduce-overhead')
-            print("  [ImagineRollout] WM compiled with torch.compile (reduce-overhead)")
-        else:
-            self._wm_forward = self.world_model
-
-    def _wm_call(self, ctx_l0, ctx_l1, ctx_l2, ctx_a):
-        """Unified WM forward with AMP wrapping."""
-        with autocast(device_type=self.device.type, enabled=self.use_amp):
-            return self._wm_forward(ctx_l0, ctx_l1, ctx_l2, ctx_a)
-
     @torch.no_grad()
-    def _sample_patches(self, logits: torch.Tensor) -> torch.Tensor:
-        """Sample independently from each patch position."""
-        B, P, V = logits.shape
+    def _sample_token(self, logits: torch.Tensor) -> torch.Tensor:
+        """Sample from categorical distribution. logits: (B, V) -> (B,)"""
         if self.temperature <= 0:
             return logits.argmax(dim=-1)
         probs = F.softmax(logits / self.temperature, dim=-1)
-        flat  = probs.reshape(B * P, V)
-        samp  = torch.multinomial(flat, num_samples=1).squeeze(-1)
-        return samp.reshape(B, P)
+        return torch.multinomial(probs, 1).squeeze(-1)
 
-    def _trim(self, t):
-        """Trim to max_context_t timesteps."""
-        return t[:, -self.max_context_t:] if t.size(1) > self.max_context_t else t
-
-    def _extract_features(
-        self,
-        context_l0:      torch.Tensor,
-        context_l1:      torch.Tensor,
-        context_l2:      torch.Tensor,
-        context_actions: torch.Tensor,
-    ) -> torch.Tensor:
-        """Run frozen WM, pool per level, pass through feature extractor."""
-        ctx_l0 = self._trim(context_l0)
-        ctx_l1 = self._trim(context_l1)
-        ctx_l2 = self._trim(context_l2)
-        ctx_a  = self._trim(context_actions)
-
-        out = self._wm_call(ctx_l0, ctx_l1, ctx_l2, ctx_a)
-        x   = out['hidden']            # (B, T*37, D)
-        B   = x.size(0)
-        T   = ctx_l0.size(1)
-        D   = x.size(-1)
-
-        x_ts    = x.reshape(B, T, 37, D)
-        mean_l0 = x_ts[:, -1, 0:4,   :].mean(dim=1)   # (B, D)
-        mean_l1 = x_ts[:, -1, 4:20,  :].mean(dim=1)   # (B, D)
-        mean_l2 = x_ts[:, -1, 20:36, :].mean(dim=1)   # (B, D)
-
+    def _extract_features_from_hidden(self, x_ts: torch.Tensor) -> torch.Tensor:
+        """Pool per-level hidden states and pass through feature extractor.
+        x_ts: (B, 37, D) hidden states for one timestep.
+        """
+        mean_l0 = x_ts[:, L0_START:L0_END, :].mean(dim=1)
+        mean_l1 = x_ts[:, L1_START:L1_END, :].mean(dim=1)
+        mean_l2 = x_ts[:, L2_START:L2_END, :].mean(dim=1)
         hidden_3 = torch.stack([mean_l0, mean_l1, mean_l2], dim=1)  # (B, 3, D)
-        return self.feature_extractor(hidden_3)                      # (B, feat_dim)
+        return self.feature_extractor(hidden_3)
 
     @torch.no_grad()
-    def _cascade_predict_step(
+    def _do_cached_cascade(
         self,
-        context_l0:      torch.Tensor,
-        context_l1:      torch.Tensor,
-        context_l2:      torch.Tensor,
-        context_actions: torch.Tensor,
-    ):
-        """3-pass cascade to generate one new (l0, l1, l2) timestep."""
-        B = context_l0.size(0)
+        kv_cache: list,
+        cached_seq_len: int,
+        action: torch.Tensor,
+        prev_l0: torch.Tensor,
+        prev_l1: torch.Tensor,
+        prev_l2: torch.Tensor,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, list, int, torch.Tensor]:
+        """KV-cached cascade: pop-and-redo 3 passes to predict L0, L1, L2."""
+        B = action.size(0)
+        P = TOKENS_PER_TIMESTEP
 
-        ctx_l0 = self._trim(context_l0)
-        ctx_l1 = self._trim(context_l1)
-        ctx_l2 = self._trim(context_l2)
-        ctx_a  = self._trim(context_actions)
+        # REVERT: pop last 37 positions (had placeholder action)
+        kv_reverted = [
+            (K[:, :, :-P, :], V[:, :, :-P, :]) for (K, V) in kv_cache
+        ]
+        revert_len = cached_seq_len - P
 
-        # Pass 1: predict L0
-        out1   = self._wm_call(ctx_l0, ctx_l1, ctx_l2, ctx_a)
-        new_l0 = self._sample_patches(out1['logits_l0'][:, -1])   # (B, 4)
+        # PASS 1: re-embed previous timestep with real action, predict L0
+        with autocast(device_type=self.device.type, enabled=self.use_amp):
+            x_step0, kv_step0, len_step0 = self.world_model.forward_incremental(
+                prev_l0, prev_l1, prev_l2, action.unsqueeze(1),
+                kv_reverted, revert_len,
+            )
 
-        # Pass 2: extend context with new L0 (L1/L2 zeroed), predict L1
-        ext_l0 = self._trim(torch.cat([ctx_l0, new_l0.unsqueeze(1)], dim=1))
-        ext_l1 = self._trim(torch.cat([ctx_l1, torch.zeros(B, 1, 16, dtype=torch.long, device=self.device)], dim=1))
-        ext_l2 = self._trim(torch.cat([ctx_l2, torch.zeros(B, 1, 16, dtype=torch.long, device=self.device)], dim=1))
-        ext_a  = self._trim(torch.cat([ctx_a,  torch.zeros(B, 1,     dtype=torch.long, device=self.device)], dim=1))
+        logits_l0 = self.world_model.head_l0(x_step0[:, ACTION_POS, :])
+        new_l0_token = self._sample_token(logits_l0)
+        new_l0 = new_l0_token.unsqueeze(1).expand(B, NUM_L0)
 
-        out2   = self._wm_call(ext_l0, ext_l1, ext_l2, ext_a)
-        new_l1 = self._sample_patches(out2['logits_l1'][:, -1])   # (B, 16)
+        # PASS 2: extend with real L0, zeroed L1/L2, predict L1
+        new_l0_ts = new_l0.unsqueeze(1)
+        zero_l1 = torch.zeros(B, 1, NUM_L1, dtype=torch.long, device=self.device)
+        zero_l2 = torch.zeros(B, 1, NUM_L2, dtype=torch.long, device=self.device)
+        zero_a  = torch.zeros(B, 1, dtype=torch.long, device=self.device)
 
-        # Pass 3: fill real L1, predict L2
-        ext_l1[:, -1] = new_l1
-        out3   = self._wm_call(ext_l0, ext_l1, ext_l2, ext_a)
-        new_l2 = self._sample_patches(out3['logits_l2'][:, -1])   # (B, 16)
+        with autocast(device_type=self.device.type, enabled=self.use_amp):
+            x_step2, _, _ = self.world_model.forward_incremental(
+                new_l0_ts, zero_l1, zero_l2, zero_a,
+                kv_step0, len_step0,
+            )
 
-        return new_l0, new_l1, new_l2
+        logits_l1 = self.world_model.head_l1(x_step2[:, L0_END - 1, :])
+        new_l1_token = self._sample_token(logits_l1)
+        new_l1 = new_l1_token.unsqueeze(1).expand(B, NUM_L1)
+
+        # PASS 3: revert to step0, extend with real L0 + real L1, predict L2
+        real_l1 = new_l1.unsqueeze(1)
+
+        with autocast(device_type=self.device.type, enabled=self.use_amp):
+            x_step3, kv_step3, len_step3 = self.world_model.forward_incremental(
+                new_l0_ts, real_l1, zero_l2, zero_a,
+                kv_step0, len_step0,
+            )
+
+        logits_l2 = self.world_model.head_l2(x_step3[:, L1_END - 1, :])
+        new_l2_token = self._sample_token(logits_l2)
+        new_l2 = new_l2_token.unsqueeze(1).expand(B, NUM_L2)
+
+        return new_l0, new_l1, new_l2, kv_step3, len_step3, x_step3
 
     def rollout(
         self,
         seed_context: dict,
         horizon:      Optional[int] = None,
     ) -> SpatialTrajectory:
-        """Run imagination rollout seeded from real context."""
+        """KV-cached imagination rollout."""
         H = horizon if horizon is not None else self.max_horizon
 
-        ctx_l0 = seed_context['tokens_l0'].to(self.device)
-        ctx_l1 = seed_context['tokens_l1'].to(self.device)
-        ctx_l2 = seed_context['tokens_l2'].to(self.device)
-        ctx_a  = seed_context['actions'].to(self.device)
+        # TRIM SEED TO MAX_CONTEXT_T
+        ctx_l0 = seed_context['tokens_l0'].to(self.device)[:, -self.max_context_t:]
+        ctx_l1 = seed_context['tokens_l1'].to(self.device)[:, -self.max_context_t:]
+        ctx_l2 = seed_context['tokens_l2'].to(self.device)[:, -self.max_context_t:]
+        ctx_a  = seed_context['actions'].to(self.device)[:, -self.max_context_t:]
 
         B = ctx_l0.size(0)
+        T_seed = ctx_l0.size(1)
 
-        traj_l0        = torch.zeros(B, H, 4,  dtype=torch.long,  device=self.device)
-        traj_l1        = torch.zeros(B, H, 16, dtype=torch.long,  device=self.device)
-        traj_l2        = torch.zeros(B, H, 16, dtype=torch.long,  device=self.device)
-        traj_actions   = torch.zeros(B, H,     dtype=torch.long,  device=self.device)
-        traj_log_probs = torch.zeros(B, H,     dtype=torch.float, device=self.device)
-        traj_entropies = torch.zeros(B, H,     dtype=torch.float, device=self.device)
+        # PHASE 1: PRIME KV-CACHE WITH SEED CONTEXT
+        with torch.no_grad():
+            with autocast(device_type=self.device.type, enabled=self.use_amp):
+                hidden_full, kv_cache = self.world_model.get_context_hidden(
+                    ctx_l0, ctx_l1, ctx_l2, ctx_a
+                )
+        cached_seq_len = T_seed * TOKENS_PER_TIMESTEP
+
+        last_ts_hidden = hidden_full[:, -TOKENS_PER_TIMESTEP:, :]
+
+        # ALLOCATE TRAJECTORY STORAGE
+        traj_l0        = torch.zeros(B, H, NUM_L0, dtype=torch.long,  device=self.device)
+        traj_l1        = torch.zeros(B, H, NUM_L1, dtype=torch.long,  device=self.device)
+        traj_l2        = torch.zeros(B, H, NUM_L2, dtype=torch.long,  device=self.device)
+        traj_actions   = torch.zeros(B, H,         dtype=torch.long,  device=self.device)
+        traj_log_probs = torch.zeros(B, H,         dtype=torch.float, device=self.device)
+        traj_entropies = torch.zeros(B, H,         dtype=torch.float, device=self.device)
         traj_features  = []
-        traj_values    = torch.zeros(B, H,     dtype=torch.float, device=self.device)
-        traj_rewards   = torch.zeros(B, H,     dtype=torch.float, device=self.device)
-        traj_continues = torch.zeros(B, H,     dtype=torch.float, device=self.device)
+        traj_values    = torch.zeros(B, H,         dtype=torch.float, device=self.device)
+        traj_rewards   = torch.zeros(B, H,         dtype=torch.float, device=self.device)
+        traj_continues = torch.zeros(B, H,         dtype=torch.float, device=self.device)
 
+        prev_l0 = ctx_l0[:, -1:]
+        prev_l1 = ctx_l1[:, -1:]
+        prev_l2 = ctx_l2[:, -1:]
+
+        # PHASE 2: IMAGINATION LOOP
         for h in range(H):
-            # Feature extraction (1 WM forward)
-            feature = self._extract_features(ctx_l0, ctx_l1, ctx_l2, ctx_a)
+            feature = self._extract_features_from_hidden(last_ts_hidden)
 
-            # Actor picks action
             distribution = self.actor_network(feature)
-            action       = distribution.sample()
-            log_probs    = distribution.log_prob(action)
-            entropy      = distribution.entropy()
+            action    = distribution.sample()
+            log_probs = distribution.log_prob(action)
+            entropy   = distribution.entropy()
 
-            # Critic, reward, continue predictions
             with torch.no_grad():
                 value          = self.critic_network(feature)
                 reward         = self.reward_network(feature)
                 continue_logit = self.continue_network(feature)
                 continue_prob  = torch.sigmoid(continue_logit)
 
-            # Write action, then cascade (3 WM forwards)
-            ctx_a = ctx_a.clone()
-            ctx_a[:, -1] = action
-
-            with torch.no_grad():
-                new_l0, new_l1, new_l2 = self._cascade_predict_step(
-                    ctx_l0, ctx_l1, ctx_l2, ctx_a
+            new_l0, new_l1, new_l2, kv_cache, cached_seq_len, last_ts_hidden = \
+                self._do_cached_cascade(
+                    kv_cache, cached_seq_len, action,
+                    prev_l0, prev_l1, prev_l2,
                 )
 
-            # Extend context
-            ctx_l0 = torch.cat([ctx_l0, new_l0.unsqueeze(1)], dim=1)
-            ctx_l1 = torch.cat([ctx_l1, new_l1.unsqueeze(1)], dim=1)
-            ctx_l2 = torch.cat([ctx_l2, new_l2.unsqueeze(1)], dim=1)
-            ctx_a  = torch.cat([ctx_a,  torch.zeros(B, 1, dtype=torch.long, device=self.device)], dim=1)
+            prev_l0 = new_l0.unsqueeze(1)
+            prev_l1 = new_l1.unsqueeze(1)
+            prev_l2 = new_l2.unsqueeze(1)
 
             traj_l0[:, h]        = new_l0
             traj_l1[:, h]        = new_l1
@@ -246,8 +232,8 @@ class SpatialImagineRollout:
             traj_rewards[:, h]   = reward
             traj_continues[:, h] = continue_prob
 
-        # Bootstrap value
-        last_feat  = self._extract_features(ctx_l0, ctx_l1, ctx_l2, ctx_a)
+        # BOOTSTRAP VALUE
+        last_feat  = self._extract_features_from_hidden(last_ts_hidden)
         last_value = self.critic_network(last_feat)
 
         return SpatialTrajectory(

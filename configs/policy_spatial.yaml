@@ -10,11 +10,11 @@ policy:
   num_actions: 6
 
   horizon_mode: "flat"
-  max_horizon: 15
+  max_horizon: 10
   min_horizon: 5
-  flat_horizon: 15
+  flat_horizon: 10
   temperature: 1.0
-  seed_context_len: 10
+  seed_context_len: 5
 
   batch_size: 32
 
